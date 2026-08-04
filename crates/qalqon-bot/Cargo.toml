@@ -1,0 +1,19 @@
+[package]
+name = "qalqon-bot"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+chrono.workspace = true
+dashmap.workspace = true
+dotenvy.workspace = true
+qalqon-core = { path = "../qalqon-core" }
+qalqon-storage = { path = "../qalqon-storage" }
+teloxide.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+url.workspace = true

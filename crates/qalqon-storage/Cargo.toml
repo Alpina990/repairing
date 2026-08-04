@@ -1,0 +1,15 @@
+[package]
+name = "qalqon-storage"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+async-trait.workspace = true
+qalqon-core = { path = "../qalqon-core" }
+sqlx.workspace = true
+
+[dev-dependencies]
+chrono.workspace = true
+tokio.workspace = true

@@ -1,0 +1,31 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: qalqon
+      POSTGRES_USER: qalqon
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U qalqon -d qalqon"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  bot:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      TELOXIDE_TOKEN: ${TELOXIDE_TOKEN:?TELOXIDE_TOKEN is required}
+      DATABASE_URL: postgres://qalqon:${POSTGRES_PASSWORD}@postgres:5432/qalqon
+      OWNER_IDS: ${OWNER_IDS:-}
+      RUST_LOG: ${RUST_LOG:-qalqon=info,teloxide=info}
+      HEALTH_ADDR: 0.0.0.0:8080
+
+volumes:
+  postgres_data:
