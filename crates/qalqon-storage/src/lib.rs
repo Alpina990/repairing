@@ -6,6 +6,9 @@ use qalqon_core::{
 };
 use sqlx::{PgPool, Row, postgres::PgPoolOptions};
 
+pub mod admin;
+pub use admin::*;
+
 #[derive(Debug, Clone)]
 pub struct PgModerationStore {
     pool: PgPool,
@@ -84,21 +87,26 @@ impl ModerationStore for PgModerationStore {
         window_secs: u64,
         action: Sanction,
     ) -> Result<(), StoreError> {
-        self.ensure_chat(chat_id).await?;
+        self.ensure_admin_rows(chat_id).await?;
         sqlx::query("UPDATE chat_settings SET flood_limit=$2, flood_window_secs=$3, flood_action=$4, updated_at=NOW() WHERE chat_id=$1")
+            .bind(chat_id).bind(i32::from(limit)).bind(i32::try_from(window_secs).map_err(StoreError::new)?)
+            .bind(action.as_str()).execute(&self.pool).await.map_err(StoreError::new)?;
+        sqlx::query("UPDATE protection_modules SET enabled=$2>0,configured=TRUE,config=jsonb_build_object('limit',$2,'window_secs',$3,'action',$4),updated_at=NOW() WHERE chat_id=$1 AND module_key='anti_flood'")
             .bind(chat_id).bind(i32::from(limit)).bind(i32::try_from(window_secs).map_err(StoreError::new)?)
             .bind(action.as_str()).execute(&self.pool).await.map_err(StoreError::new)?;
         Ok(())
     }
 
     async fn set_warn_limit(&self, chat_id: ChatId, limit: u16) -> Result<(), StoreError> {
-        self.ensure_chat(chat_id).await?;
+        self.ensure_admin_rows(chat_id).await?;
         sqlx::query("UPDATE chat_settings SET warn_limit=$2, updated_at=NOW() WHERE chat_id=$1")
             .bind(chat_id)
             .bind(i32::from(limit))
             .execute(&self.pool)
             .await
             .map_err(StoreError::new)?;
+        sqlx::query("UPDATE protection_modules SET enabled=TRUE,configured=TRUE,config=jsonb_set(config,'{limit}',to_jsonb($2::INTEGER),TRUE),updated_at=NOW() WHERE chat_id=$1 AND module_key='warning_policy'")
+            .bind(chat_id).bind(i32::from(limit)).execute(&self.pool).await.map_err(StoreError::new)?;
         Ok(())
     }
 
@@ -108,20 +116,24 @@ impl ModerationStore for PgModerationStore {
         enabled: bool,
         template: Option<&str>,
     ) -> Result<(), StoreError> {
-        self.ensure_chat(chat_id).await?;
+        self.ensure_admin_rows(chat_id).await?;
         sqlx::query("UPDATE chat_settings SET welcome_enabled=$2, welcome_template=COALESCE($3, welcome_template), updated_at=NOW() WHERE chat_id=$1")
+            .bind(chat_id).bind(enabled).bind(template).execute(&self.pool).await.map_err(StoreError::new)?;
+        sqlx::query("UPDATE protection_modules SET enabled=$2,configured=CASE WHEN $3::TEXT IS NULL THEN configured ELSE $3<>'' END,config=CASE WHEN $3::TEXT IS NULL THEN config ELSE jsonb_build_object('template',$3::TEXT) END,updated_at=NOW() WHERE chat_id=$1 AND module_key='welcome'")
             .bind(chat_id).bind(enabled).bind(template).execute(&self.pool).await.map_err(StoreError::new)?;
         Ok(())
     }
 
     async fn set_rules(&self, chat_id: ChatId, rules: &str) -> Result<(), StoreError> {
-        self.ensure_chat(chat_id).await?;
+        self.ensure_admin_rows(chat_id).await?;
         sqlx::query("UPDATE chat_settings SET rules=$2, updated_at=NOW() WHERE chat_id=$1")
             .bind(chat_id)
             .bind(rules)
             .execute(&self.pool)
             .await
             .map_err(StoreError::new)?;
+        sqlx::query("UPDATE protection_modules SET enabled=trim($2)<>'',configured=trim($2)<>'',config=jsonb_build_object('rules',$2),updated_at=NOW() WHERE chat_id=$1 AND module_key='rules'")
+            .bind(chat_id).bind(rules).execute(&self.pool).await.map_err(StoreError::new)?;
         Ok(())
     }
 
@@ -135,7 +147,7 @@ impl ModerationStore for PgModerationStore {
     }
 
     async fn add_blocked_term(&self, chat_id: ChatId, term: &str) -> Result<bool, StoreError> {
-        self.ensure_chat(chat_id).await?;
+        self.ensure_admin_rows(chat_id).await?;
         let result = sqlx::query(
             "INSERT INTO blocked_terms(chat_id, term) VALUES ($1, $2) ON CONFLICT DO NOTHING",
         )
@@ -144,6 +156,10 @@ impl ModerationStore for PgModerationStore {
         .execute(&self.pool)
         .await
         .map_err(StoreError::new)?;
+        if result.rows_affected() == 1 {
+            sqlx::query("UPDATE protection_modules SET enabled=TRUE,configured=TRUE,updated_at=NOW() WHERE chat_id=$1 AND module_key='blocklist'")
+                .bind(chat_id).execute(&self.pool).await.map_err(StoreError::new)?;
+        }
         Ok(result.rows_affected() == 1)
     }
 
@@ -155,6 +171,10 @@ impl ModerationStore for PgModerationStore {
                 .execute(&self.pool)
                 .await
                 .map_err(StoreError::new)?;
+        if result.rows_affected() > 0 {
+            sqlx::query("UPDATE protection_modules SET configured=EXISTS(SELECT 1 FROM blocked_terms WHERE chat_id=$1),updated_at=NOW() WHERE chat_id=$1 AND module_key='blocklist'")
+                .bind(chat_id).execute(&self.pool).await.map_err(StoreError::new)?;
+        }
         Ok(result.rows_affected() > 0)
     }
 
@@ -237,7 +257,8 @@ mod tests {
     use chrono::Utc;
     use qalqon_core::{AuditEvent, ModerationStore, Sanction};
 
-    use super::PgModerationStore;
+    use super::{AuditFilter, MemberUpsert, PgModerationStore, RichAuditEvent};
+    use serde_json::json;
 
     fn unique_chat_id() -> i64 {
         let nanos = SystemTime::now()
@@ -416,6 +437,123 @@ mod tests {
             10
         );
 
+        sqlx::query("DELETE FROM chat_settings WHERE chat_id = $1")
+            .bind(chat_id)
+            .execute(&store.pool)
+            .await
+            .expect("chat cleanup");
+    }
+
+    #[tokio::test]
+    async fn mini_app_backend_roundtrip() {
+        let Some(store) = test_store().await else {
+            return;
+        };
+        let chat_id = unique_chat_id();
+        let user_id = 998_003_u64;
+        store
+            .upsert_member(&MemberUpsert {
+                chat_id,
+                chat_title: "Mini App Test",
+                chat_username: Some("mini_app_test"),
+                chat_type: "supergroup",
+                user_id,
+                username: Some("Alisher"),
+                first_name: "Alisher",
+                last_name: Some("Test"),
+                is_bot: false,
+                is_admin: Some(true),
+                status: "administrator",
+            })
+            .await
+            .expect("index member");
+        assert_eq!(
+            store
+                .members(chat_id, Some("alish"), 10)
+                .await
+                .expect("search member")
+                .len(),
+            1
+        );
+
+        let entry = store
+            .add_blocklist_entry(chat_id, "Reklama")
+            .await
+            .expect("add blocklist")
+            .expect("new entry");
+        store
+            .record_blocklist_match(chat_id, "reklama")
+            .await
+            .expect("record match");
+        let entries = store
+            .blocklist(chat_id, Some("rek"), 10)
+            .await
+            .expect("list blocklist");
+        assert_eq!(entries[0].id, entry.id);
+        assert_eq!(entries[0].match_count, 1);
+
+        store
+            .rich_audit(&RichAuditEvent {
+                chat_id,
+                actor_id: Some(42),
+                target_id: user_id,
+                action: "mute",
+                reason: Some("API test"),
+                source: "admin",
+                status: "success",
+                duration_secs: Some(3600),
+                telegram_message_id: Some(11),
+                telegram_update_id: Some(12),
+                metadata: json!({"origin":"integration"}),
+            })
+            .await
+            .expect("rich audit");
+        let audits = store
+            .audit_records(
+                chat_id,
+                &AuditFilter {
+                    action: Some("mute".into()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("read audit");
+        assert_eq!(audits.len(), 1);
+        assert_eq!(audits[0].duration_secs, Some(3600));
+
+        store
+            .update_runtime(chat_id, true, true, true, true, true)
+            .await
+            .expect("runtime health");
+        assert!(
+            store
+                .runtime_health(chat_id)
+                .await
+                .expect("read runtime")
+                .bot_admin
+        );
+        assert_eq!(
+            store.modules(chat_id).await.expect("module registry").len(),
+            15
+        );
+        store
+            .create_incident(chat_id, "anti_flood", "high", json!({"test":true}))
+            .await
+            .expect("create incident");
+        assert_eq!(
+            store
+                .incident_metrics(chat_id)
+                .await
+                .expect("incident metrics")
+                .open_incidents,
+            1
+        );
+
+        sqlx::query("DELETE FROM moderation_audit WHERE chat_id = $1")
+            .bind(chat_id)
+            .execute(&store.pool)
+            .await
+            .expect("audit cleanup");
         sqlx::query("DELETE FROM chat_settings WHERE chat_id = $1")
             .bind(chat_id)
             .execute(&store.pool)

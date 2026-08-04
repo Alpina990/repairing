@@ -1,3 +1,4 @@
+mod api;
 mod commands;
 mod config;
 mod handler;
@@ -30,7 +31,8 @@ async fn main() -> Result<()> {
     init_tracing();
 
     let config = Config::from_env()?;
-    let store: Arc<dyn ModerationStore> = Arc::new(connect_store(&config).await?);
+    let pg_store = connect_store(&config).await?;
+    let store: Arc<dyn ModerationStore> = Arc::new(pg_store.clone());
     let mut bot = Bot::new(config.token.clone());
     if let Some(api_url) = config.telegram_api_url.clone() {
         bot = bot.set_api_url(api_url);
@@ -61,20 +63,43 @@ async fn main() -> Result<()> {
         .context("Telegram command menu ro'yxatdan o'tmadi")?;
     tracing::info!(username = me.username(), "CheklaBot ishga tushdi");
 
-    let schema = Update::filter_message().endpoint(handler::message);
+    let schema = dptree::entry()
+        .branch(Update::filter_message().endpoint(handler::message))
+        .branch(Update::filter_edited_message().endpoint(handler::edited_message));
     let health_listener = health::bind(config.health_addr).await?;
+    let api_listener = api::bind(config.api_addr).await?;
     let health_task = tokio::spawn(health::serve(health_listener, store));
+    let api_state = api::ApiState::new(
+        bot.clone(),
+        me.clone(),
+        state.clone(),
+        pg_store.clone(),
+        config.token,
+        Duration::from_secs(config.mini_app_auth_max_age_secs),
+    );
+    let api_origin = config.mini_app_origin.clone();
+    let api_task =
+        tokio::spawn(
+            async move { api::serve(api_listener, api_state, api_origin.as_deref()).await },
+        );
     Dispatcher::builder(bot, schema)
-        .dependencies(dptree::deps![state, me])
+        .dependencies(dptree::deps![state, me, pg_store.clone()])
         .enable_ctrlc_handler()
         .build()
         .dispatch()
         .await;
     health_task.abort();
+    api_task.abort();
     match health_task.await {
         Err(error) if error.is_cancelled() => {}
         Err(error) => tracing::warn!(%error, "health server task join xatosi"),
         Ok(Err(error)) => tracing::warn!(%error, "health server xato bilan tugadi"),
+        Ok(Ok(())) => {}
+    }
+    match api_task.await {
+        Err(error) if error.is_cancelled() => {}
+        Err(error) => tracing::warn!(%error, "Mini App API task join xatosi"),
+        Ok(Err(error)) => tracing::warn!(%error, "Mini App API xato bilan tugadi"),
         Ok(Ok(())) => {}
     }
     tracing::info!("CheklaBot to'xtadi");

@@ -3,6 +3,8 @@ use std::str::FromStr;
 use anyhow::{Context, Result, bail};
 use chrono::{Duration as ChronoDuration, Utc};
 use qalqon_core::{AuditEvent, ChatSettings, ModerationStore, Sanction};
+use qalqon_storage::{PgModerationStore, RichAuditEvent};
+use serde_json::json;
 use teloxide::{
     Bot,
     payloads::{RestrictChatMemberSetters, UnbanChatMemberSetters},
@@ -13,7 +15,7 @@ use teloxide::{
 
 use crate::state::AppState;
 
-#[derive(BotCommands, Clone, Debug)]
+#[derive(BotCommands, Clone, Copy, Debug)]
 #[command(rename_rule = "lowercase", description = "CheklaBot buyruqlari:")]
 pub enum Command {
     #[command(description = "botni ishga tushirish")]
@@ -56,7 +58,13 @@ pub enum Command {
     Blocklist,
 }
 
-pub async fn handle(bot: Bot, msg: Message, command: Command, state: AppState) -> Result<()> {
+pub async fn handle(
+    bot: Bot,
+    msg: Message,
+    command: Command,
+    state: AppState,
+    store: PgModerationStore,
+) -> Result<()> {
     let chat_id = msg.chat.id;
     match command {
         Command::Start => {
@@ -95,6 +103,15 @@ pub async fn handle(bot: Bot, msg: Message, command: Command, state: AppState) -
             }
             state.store.set_rules(chat_id.0, rules).await?;
             state.invalidate_policy(chat_id.0);
+            audit_command(
+                &store,
+                &msg,
+                actor_id(&msg),
+                "rules_update",
+                Some(rules),
+                None,
+            )
+            .await;
             bot.send_message(chat_id, "Qoidalar saqlandi.").await?;
         }
         Command::Setflood => {
@@ -108,6 +125,15 @@ pub async fn handle(bot: Bot, msg: Message, command: Command, state: AppState) -
                 .set_flood(chat_id.0, limit, window, action)
                 .await?;
             state.invalidate_policy(chat_id.0);
+            audit_command(
+                &store,
+                &msg,
+                actor_id(&msg),
+                "settings_update",
+                Some("anti_flood"),
+                None,
+            )
+            .await;
             bot.send_message(
                 chat_id,
                 format!(
@@ -125,6 +151,15 @@ pub async fn handle(bot: Bot, msg: Message, command: Command, state: AppState) -
             }
             state.store.set_warn_limit(chat_id.0, limit).await?;
             state.invalidate_policy(chat_id.0);
+            audit_command(
+                &store,
+                &msg,
+                actor_id(&msg),
+                "settings_update",
+                Some("warn_limit"),
+                None,
+            )
+            .await;
             bot.send_message(chat_id, format!("Warning limiti: {limit}"))
                 .await?;
         }
@@ -133,6 +168,15 @@ pub async fn handle(bot: Bot, msg: Message, command: Command, state: AppState) -
             let enabled = parse_on_off(require_args(&msg, "/welcome on|off")?)?;
             state.store.set_welcome(chat_id.0, enabled, None).await?;
             state.invalidate_policy(chat_id.0);
+            audit_command(
+                &store,
+                &msg,
+                actor_id(&msg),
+                "welcome_update",
+                Some(if enabled { "on" } else { "off" }),
+                None,
+            )
+            .await;
             bot.send_message(
                 chat_id,
                 if enabled {
@@ -154,6 +198,15 @@ pub async fn handle(bot: Bot, msg: Message, command: Command, state: AppState) -
                 .set_welcome(chat_id.0, true, Some(template))
                 .await?;
             state.invalidate_policy(chat_id.0);
+            audit_command(
+                &store,
+                &msg,
+                actor_id(&msg),
+                "welcome_update",
+                Some(template),
+                None,
+            )
+            .await;
             bot.send_message(chat_id, "Welcome matni saqlandi. Placeholderlar: {first_name}, {username}, {user_id}, {chat_title}").await?;
         }
         Command::Addblock | Command::Rmblock => {
@@ -168,6 +221,19 @@ pub async fn handle(bot: Bot, msg: Message, command: Command, state: AppState) -
                 state.store.remove_blocked_term(chat_id.0, term).await?
             };
             state.invalidate_policy(chat_id.0);
+            audit_command(
+                &store,
+                &msg,
+                actor_id(&msg),
+                if matches!(command, Command::Addblock) {
+                    "blocklist_add"
+                } else {
+                    "blocklist_remove"
+                },
+                Some(term),
+                None,
+            )
+            .await;
             bot.send_message(
                 chat_id,
                 if changed {
@@ -189,6 +255,7 @@ pub async fn handle(bot: Bot, msg: Message, command: Command, state: AppState) -
                 target,
                 msg.from.as_ref().map(|u| u.id.0),
                 reason,
+                Some((&store, None)),
             )
             .await?;
         }
@@ -196,6 +263,7 @@ pub async fn handle(bot: Bot, msg: Message, command: Command, state: AppState) -
             require_admin(&bot, &msg, &state).await?;
             let target = reply_target(&msg)?;
             let removed = state.store.clear_warnings(chat_id.0, target.id.0).await?;
+            audit_command(&store, &msg, target.id.0, "unwarn", None, None).await;
             bot.send_message(chat_id, format!("{} ta warning olib tashlandi.", removed))
                 .await?;
         }
@@ -231,6 +299,22 @@ pub async fn handle(bot: Bot, msg: Message, command: Command, state: AppState) -
                 }
                 _ => unreachable!(),
             }
+            audit_command(
+                &store,
+                &msg,
+                target.id.0,
+                match command {
+                    Command::Ban => "ban",
+                    Command::Mute => "mute",
+                    Command::Unmute => "unmute",
+                    _ => unreachable!(),
+                },
+                args(&msg),
+                matches!(command, Command::Mute)
+                    .then(|| parse_duration(args(&msg).unwrap_or("1h")).ok())
+                    .flatten(),
+            )
+            .await;
             bot.send_message(chat_id, "Bajarildi.").await?;
         }
         Command::Unban => {
@@ -239,6 +323,7 @@ pub async fn handle(bot: Bot, msg: Message, command: Command, state: AppState) -
             bot.unban_chat_member(chat_id, UserId(id))
                 .only_if_banned(true)
                 .await?;
+            audit_command(&store, &msg, id, "unban", None, None).await;
             bot.send_message(chat_id, "Foydalanuvchi bandan chiqarildi.")
                 .await?;
         }
@@ -253,6 +338,7 @@ pub async fn warn_user(
     target: &User,
     actor_id: Option<u64>,
     reason: &str,
+    audit: Option<(&PgModerationStore, Option<i64>)>,
 ) -> Result<()> {
     if reason.chars().count() > 1000 {
         bail!("warning sababi 1000 belgidan oshmasligi kerak");
@@ -297,16 +383,69 @@ pub async fn warn_user(
         )
         .await?;
     }
-    audit_best_effort(
-        state.store.as_ref(),
-        msg.chat.id.0,
-        actor_id,
-        target.id.0,
-        "warn",
-        Some(reason),
-    )
-    .await;
+    if let Some((store, telegram_update_id)) = audit {
+        if let Err(error) = store
+            .rich_audit(&RichAuditEvent {
+                chat_id: msg.chat.id.0,
+                actor_id,
+                target_id: target.id.0,
+                action: "warn",
+                reason: Some(reason),
+                source: if actor_id.is_some() { "admin" } else { "auto" },
+                status: "success",
+                duration_secs: None,
+                telegram_message_id: Some(i64::from(msg.id.0)),
+                telegram_update_id,
+                metadata: json!({"count":warning.count,"limit":warning.limit,"reached_limit":warning.reached_limit}),
+            })
+            .await
+        {
+            tracing::warn!(%error, "warning audit yozilmadi");
+        }
+    } else {
+        audit_best_effort(
+            state.store.as_ref(),
+            msg.chat.id.0,
+            actor_id,
+            target.id.0,
+            "warn",
+            Some(reason),
+        )
+        .await;
+    }
     Ok(())
+}
+
+fn actor_id(msg: &Message) -> u64 {
+    msg.from.as_ref().map_or(0, |user| user.id.0)
+}
+
+async fn audit_command(
+    store: &PgModerationStore,
+    msg: &Message,
+    target_id: u64,
+    action: &str,
+    reason: Option<&str>,
+    duration_secs: Option<u64>,
+) {
+    if let Err(error) = store
+        .rich_audit(&RichAuditEvent {
+            chat_id: msg.chat.id.0,
+            actor_id: msg.from.as_ref().map(|user| user.id.0),
+            target_id,
+            action,
+            reason,
+            source: "admin",
+            status: "success",
+            duration_secs,
+            telegram_message_id: Some(i64::from(msg.id.0)),
+            telegram_update_id: None,
+            metadata: json!({}),
+        })
+        .await
+    {
+        tracing::warn!(%error, "command audit yozilmadi");
+    }
 }
 
 pub async fn execute_sanction(

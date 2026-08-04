@@ -15,6 +15,9 @@ pub struct Config {
     pub database_connect_max_attempts: u32,
     pub database_connect_backoff_ms: u64,
     pub health_addr: SocketAddr,
+    pub api_addr: SocketAddr,
+    pub mini_app_auth_max_age_secs: u64,
+    pub mini_app_origin: Option<String>,
 }
 
 impl Config {
@@ -52,6 +55,11 @@ impl Config {
             database_connect_max_attempts: parse_env("DATABASE_CONNECT_MAX_ATTEMPTS", 10)?,
             database_connect_backoff_ms: parse_env("DATABASE_CONNECT_BACKOFF_MS", 500)?,
             health_addr: Self::health_addr_from_env()?,
+            api_addr: parse_env("API_ADDR", "0.0.0.0:8081".parse()?)?,
+            mini_app_auth_max_age_secs: parse_env("MINI_APP_AUTH_MAX_AGE_SECS", 3600)?,
+            mini_app_origin: env::var("MINI_APP_ORIGIN")
+                .ok()
+                .filter(|value| !value.trim().is_empty()),
         })
     }
 

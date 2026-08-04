@@ -14,7 +14,7 @@ RUN apt-get update \
 
 COPY --from=builder /app/target/release/qalqon-bot /usr/local/bin/qalqon-bot
 USER 10001
-EXPOSE 8080
+EXPOSE 8080 8081
 HEALTHCHECK --interval=15s --timeout=5s --start-period=15s --retries=3 \
     CMD ["/usr/local/bin/qalqon-bot", "--healthcheck"]
 ENTRYPOINT ["/usr/local/bin/qalqon-bot"]

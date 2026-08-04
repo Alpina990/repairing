@@ -7,13 +7,20 @@ rust-version.workspace = true
 
 [dependencies]
 anyhow.workspace = true
+axum.workspace = true
 chrono.workspace = true
 dashmap.workspace = true
 dotenvy.workspace = true
+hex.workspace = true
+hmac.workspace = true
 qalqon-core = { path = "../qalqon-core" }
 qalqon-storage = { path = "../qalqon-storage" }
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
 teloxide.workspace = true
 tokio.workspace = true
+tower-http.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 url.workspace = true

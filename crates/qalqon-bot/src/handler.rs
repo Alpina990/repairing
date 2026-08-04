@@ -5,10 +5,12 @@ use qalqon_core::{
     ContentDecision, ContentPolicy, FloodKey, Sanction,
     template::{WelcomeContext, render_welcome},
 };
+use qalqon_storage::{MemberUpsert, PgModerationStore, RichAuditEvent};
+use serde_json::json;
 use teloxide::{
     Bot,
     prelude::Requester,
-    types::{Me, Message},
+    types::{Me, Message, Update},
     utils::command::BotCommands,
 };
 
@@ -17,16 +19,33 @@ use crate::{
     state::AppState,
 };
 
-pub async fn message(bot: Bot, msg: Message, me: Me, state: AppState) -> Result<()> {
+pub async fn message(
+    bot: Bot,
+    msg: Message,
+    update: Update,
+    me: Me,
+    state: AppState,
+    store: PgModerationStore,
+) -> Result<()> {
+    index_message(&store, &msg).await?;
     if let Some(members) = msg.new_chat_members() {
+        for member in members {
+            index_user(&store, &msg, member).await?;
+        }
         welcome(&bot, &msg, members, &state).await?;
         return Ok(());
     }
 
     if let Some(text) = msg.text() {
         if let Ok(command) = Command::parse(text, me.username()) {
-            if let Err(error) =
-                commands::handle(bot.clone(), msg.clone(), command, state.clone()).await
+            if let Err(error) = commands::handle(
+                bot.clone(),
+                msg.clone(),
+                command,
+                state.clone(),
+                store.clone(),
+            )
+            .await
             {
                 tracing::info!(%error, chat_id = msg.chat.id.0, "command rad etildi");
                 bot.send_message(msg.chat.id, format!("Xato: {error}"))
@@ -36,7 +55,51 @@ pub async fn message(bot: Bot, msg: Message, me: Me, state: AppState) -> Result<
         }
     }
 
-    moderate(bot, msg, state).await
+    moderate(bot, msg, state, store, i64::from(update.id.0), true).await
+}
+
+pub async fn edited_message(
+    bot: Bot,
+    msg: Message,
+    update: Update,
+    state: AppState,
+    store: PgModerationStore,
+) -> Result<()> {
+    index_message(&store, &msg).await?;
+    moderate(bot, msg, state, store, i64::from(update.id.0), false).await
+}
+
+async fn index_message(store: &PgModerationStore, msg: &Message) -> Result<()> {
+    if (!msg.chat.is_group() && !msg.chat.is_supergroup()) || msg.from.is_none() {
+        return Ok(());
+    }
+    index_user(store, msg, msg.from.as_ref().expect("checked above")).await
+}
+
+async fn index_user(
+    store: &PgModerationStore,
+    msg: &Message,
+    user: &teloxide::types::User,
+) -> Result<()> {
+    let value = MemberUpsert {
+        chat_id: msg.chat.id.0,
+        chat_title: msg.chat.title().unwrap_or("Telegram guruhi"),
+        chat_username: msg.chat.username(),
+        chat_type: if msg.chat.is_supergroup() {
+            "supergroup"
+        } else {
+            "group"
+        },
+        user_id: user.id.0,
+        username: user.username.as_deref(),
+        first_name: &user.first_name,
+        last_name: user.last_name.as_deref(),
+        is_bot: user.is_bot,
+        is_admin: None,
+        status: "member",
+    };
+    store.upsert_member(&value).await?;
+    Ok(())
 }
 
 async fn welcome(
@@ -68,7 +131,14 @@ async fn welcome(
     Ok(())
 }
 
-async fn moderate(bot: Bot, msg: Message, state: AppState) -> Result<()> {
+async fn moderate(
+    bot: Bot,
+    msg: Message,
+    state: AppState,
+    store: PgModerationStore,
+    update_id: i64,
+    check_flood: bool,
+) -> Result<()> {
     if !msg.chat.is_group() && !msg.chat.is_supergroup() {
         return Ok(());
     }
@@ -80,27 +150,66 @@ async fn moderate(bot: Bot, msg: Message, state: AppState) -> Result<()> {
     }
 
     let (settings, blocked_terms) = state.policy(msg.chat.id.0).await?;
-    let flood = state.flood.observe(
-        FloodKey {
-            chat_id: msg.chat.id.0,
-            user_id: user.id.0,
-        },
-        settings.flood_limit,
-        Duration::from_secs(settings.flood_window_secs),
-        Instant::now(),
-    );
+    let flood = check_flood
+        && state.flood.observe(
+            FloodKey {
+                chat_id: msg.chat.id.0,
+                user_id: user.id.0,
+            },
+            settings.flood_limit,
+            Duration::from_secs(settings.flood_window_secs),
+            Instant::now(),
+        );
 
     if flood {
         bot.delete_message(msg.chat.id, msg.id).await?;
-        punish(bot, msg, state, settings.flood_action, "anti-flood").await?;
+        audit_delete(&store, &msg, user.id.0, update_id, "anti_flood").await;
+        store
+            .rich_audit(&RichAuditEvent {
+                chat_id: msg.chat.id.0,
+                actor_id: None,
+                target_id: user.id.0,
+                action: "anti_flood",
+                reason: Some("sliding-window limit"),
+                source: "auto",
+                status: "success",
+                duration_secs: None,
+                telegram_message_id: Some(i64::from(msg.id.0)),
+                telegram_update_id: Some(update_id),
+                metadata: json!({"sanction":settings.flood_action.as_str()}),
+            })
+            .await?;
+        store
+            .create_incident(
+                msg.chat.id.0,
+                "anti_flood",
+                "medium",
+                json!({"user_id":user.id.0,"message_id":msg.id.0}),
+            )
+            .await?;
+        punish(
+            bot,
+            msg,
+            state,
+            store,
+            settings.flood_action,
+            "anti-flood",
+            update_id,
+        )
+        .await?;
         return Ok(());
     }
 
     let Some(text) = msg.text().or_else(|| msg.caption()) else {
         return Ok(());
     };
-    if let ContentDecision::Block { matched_term } = ContentPolicy::evaluate(text, &blocked_terms) {
+    let blocklist_enabled = store.module_enabled(msg.chat.id.0, "blocklist").await?;
+    if blocklist_enabled
+        && let ContentDecision::Block { matched_term } =
+            ContentPolicy::evaluate(text, &blocked_terms)
+    {
         bot.delete_message(msg.chat.id, msg.id).await?;
+        audit_delete(&store, &msg, user.id.0, update_id, "blocklist").await;
         commands::warn_user(
             &bot,
             &state,
@@ -108,25 +217,92 @@ async fn moderate(bot: Bot, msg: Message, state: AppState) -> Result<()> {
             user,
             None,
             &format!("blocklist: {matched_term}"),
+            Some((&store, Some(update_id))),
         )
         .await?;
+        store
+            .record_blocklist_match(msg.chat.id.0, &matched_term)
+            .await?;
+        store
+            .rich_audit(&RichAuditEvent {
+                chat_id: msg.chat.id.0,
+                actor_id: None,
+                target_id: user.id.0,
+                action: "blocklist_match",
+                reason: Some(&matched_term),
+                source: "auto",
+                status: "success",
+                duration_secs: None,
+                telegram_message_id: Some(i64::from(msg.id.0)),
+                telegram_update_id: Some(update_id),
+                metadata: json!({"matched_term":matched_term}),
+            })
+            .await?;
+        store
+            .create_incident(
+                msg.chat.id.0,
+                "blocklist_match",
+                "medium",
+                json!({"user_id":user.id.0,"message_id":msg.id.0}),
+            )
+            .await?;
     }
     Ok(())
+}
+
+async fn audit_delete(
+    store: &PgModerationStore,
+    msg: &Message,
+    target_id: u64,
+    update_id: i64,
+    reason: &str,
+) {
+    if let Err(error) = store
+        .rich_audit(&RichAuditEvent {
+            chat_id: msg.chat.id.0,
+            actor_id: None,
+            target_id,
+            action: "delete",
+            reason: Some(reason),
+            source: "auto",
+            status: "success",
+            duration_secs: None,
+            telegram_message_id: Some(i64::from(msg.id.0)),
+            telegram_update_id: Some(update_id),
+            metadata: json!({}),
+        })
+        .await
+    {
+        tracing::warn!(%error, "delete audit yozilmadi");
+    }
 }
 
 async fn punish(
     bot: Bot,
     msg: Message,
     state: AppState,
+    store: PgModerationStore,
     sanction: Sanction,
     reason: &str,
+    update_id: i64,
 ) -> Result<()> {
     let Some(user) = msg.from.as_ref() else {
         return Ok(());
     };
     match sanction {
         Sanction::Delete => {}
-        Sanction::Warn => commands::warn_user(&bot, &state, &msg, user, None, reason).await?,
+        Sanction::Warn => {
+            commands::warn_user(
+                &bot,
+                &state,
+                &msg,
+                user,
+                None,
+                reason,
+                Some((&store, Some(update_id))),
+            )
+            .await?
+        }
         Sanction::Mute | Sanction::Ban => {
             let settings = state.store.settings(msg.chat.id.0).await?;
             commands::execute_sanction(
@@ -142,15 +318,25 @@ async fn punish(
                 format!("{}: {} ({reason}).", user.first_name, sanction.as_str()),
             )
             .await?;
-            commands::audit_best_effort(
-                state.store.as_ref(),
-                msg.chat.id.0,
-                None,
-                user.id.0,
-                sanction.as_str(),
-                Some(reason),
-            )
-            .await;
+            if let Err(error) = store
+                .rich_audit(&RichAuditEvent {
+                    chat_id: msg.chat.id.0,
+                    actor_id: None,
+                    target_id: user.id.0,
+                    action: sanction.as_str(),
+                    reason: Some(reason),
+                    source: "auto",
+                    status: "success",
+                    duration_secs: matches!(sanction, Sanction::Mute)
+                        .then_some(settings.mute_duration_secs),
+                    telegram_message_id: Some(i64::from(msg.id.0)),
+                    telegram_update_id: Some(update_id),
+                    metadata: json!({}),
+                })
+                .await
+            {
+                tracing::warn!(%error, "auto moderation audit yozilmadi");
+            }
         }
     }
     Ok(())
