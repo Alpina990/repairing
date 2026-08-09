@@ -26,7 +26,8 @@ use teloxide::{
 use tokio::net::TcpListener;
 use tower_http::{
     cors::CorsLayer,
-    trace::{DefaultMakeSpan, DefaultOnResponse, TraceLayer},
+    request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer},
+    trace::{DefaultOnResponse, TraceLayer},
 };
 
 use crate::{commands, state::AppState};
@@ -133,11 +134,25 @@ pub async fn serve(
             patch(patch_module),
         )
         .route("/api/chats/{chat_id}/health", get(get_health))
+        .layer(PropagateRequestIdLayer::x_request_id())
         .layer(
             TraceLayer::new_for_http()
-                .make_span_with(DefaultMakeSpan::new().include_headers(false))
+                .make_span_with(|request: &axum::http::Request<Body>| {
+                    let request_id = request
+                        .headers()
+                        .get("x-request-id")
+                        .and_then(|value| value.to_str().ok())
+                        .unwrap_or("unknown");
+                    tracing::info_span!(
+                        "http_request",
+                        method = %request.method(),
+                        uri = %request.uri(),
+                        request_id = %request_id
+                    )
+                })
                 .on_response(DefaultOnResponse::new().include_headers(false)),
         )
+        .layer(SetRequestIdLayer::x_request_id(MakeRequestUuid))
         .with_state(state);
 
     if let Some(origin) = allowed_origin {
@@ -146,7 +161,8 @@ pub async fn serve(
             CorsLayer::new()
                 .allow_origin(origin)
                 .allow_methods([Method::GET, Method::POST, Method::PATCH, Method::DELETE])
-                .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE]),
+                .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE])
+                .expose_headers([header::HeaderName::from_static("x-request-id")]),
         );
     }
     axum::serve(listener, router).await?;
@@ -462,6 +478,13 @@ async fn moderation_warn(
         )
         .await
         .map_err(ApiError::telegram)?;
+        sync_member_status(
+            &state,
+            chat_id,
+            request.target_user_id,
+            settings.warn_action,
+        )
+        .await?;
         state
             .app
             .store
@@ -546,6 +569,7 @@ async fn moderation_mute(
     )
     .await;
     result.map_err(ApiError::telegram)?;
+    sync_member_status(&state, chat_id, request.target_user_id, Sanction::Mute).await?;
     Ok(ok(json!(ModerationResponse {
         target_user_id: request.target_user_id,
         action: "mute".into(),
@@ -585,6 +609,11 @@ async fn moderation_unmute(
     )
     .await;
     result.map_err(ApiError::telegram)?;
+    state
+        .store
+        .update_member_status(chat_id, request.target_user_id, "member")
+        .await
+        .map_err(ApiError::store)?;
     Ok(ok(
         json!({ "target_user_id":request.target_user_id, "action":"unmute" }),
     ))
@@ -614,6 +643,7 @@ async fn moderation_ban(
     )
     .await;
     result.map_err(ApiError::telegram)?;
+    sync_member_status(&state, chat_id, request.target_user_id, Sanction::Ban).await?;
     Ok(ok(
         json!({ "target_user_id":request.target_user_id, "action":"ban" }),
     ))
@@ -643,6 +673,11 @@ async fn moderation_unban(
     )
     .await;
     result.map_err(ApiError::telegram)?;
+    state
+        .store
+        .update_member_status(chat_id, request.target_user_id, "left")
+        .await
+        .map_err(ApiError::store)?;
     Ok(ok(
         json!({ "target_user_id":request.target_user_id, "action":"unban" }),
     ))
@@ -923,6 +958,7 @@ struct ExportQuery {
     format: Option<String>,
     action: Option<String>,
     source: Option<String>,
+    target_user_id: Option<u64>,
     q: Option<String>,
     from: Option<chrono::DateTime<Utc>>,
     to: Option<chrono::DateTime<Utc>>,
@@ -943,6 +979,7 @@ async fn export_audit(
     let filter = AuditFilter {
         action: query.action,
         source: query.source,
+        target_user_id: query.target_user_id,
         q: query.q,
         from: query.from,
         to: query.to,
@@ -1395,6 +1432,23 @@ async fn audit_telegram_result<T, E: std::fmt::Display>(
         json!({"telegram_error":error}),
     )
     .await;
+}
+
+async fn sync_member_status(
+    state: &ApiState,
+    chat_id: i64,
+    target_user_id: u64,
+    sanction: Sanction,
+) -> ApiResult<()> {
+    let Some(status) = commands::sanction_member_status(sanction) else {
+        return Ok(());
+    };
+    state
+        .store
+        .update_member_status(chat_id, target_user_id, status)
+        .await
+        .map_err(ApiError::store)?;
+    Ok(())
 }
 
 fn ok(data: Value) -> Json<Value> {

@@ -36,6 +36,12 @@ Batafsil qarorlar: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). O‘rganilgan l
 Mini App API kontrakti, autentifikatsiya, barcha endpointlar va protection score
 formulasi: [docs/MINI_APP_API.md](docs/MINI_APP_API.md).
 
+Dependency audit va vaqtinchalik advisory qarorlari:
+[docs/SECURITY_AUDIT.md](docs/SECURITY_AUDIT.md).
+
+Pencil UX asosidagi React/TypeScript Mini App, lokal demo va Docker ishlatish
+qo‘llanmasi: [frontend/README.md](frontend/README.md).
+
 ## Ishga tushirish
 
 1. `@BotFather` orqali bot yarating. Guruh xabarlarini ko‘rishi uchun botni guruhga admin qiling; kamida `Delete messages` va `Ban users` huquqlarini bering.

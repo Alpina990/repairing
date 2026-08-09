@@ -35,6 +35,10 @@ Success envelope: `{ "data": ... }`. Error envelope:
 {"error":{"code":"admin_required","message":"..."}}
 ```
 
+Har bir HTTP javob `x-request-id` headerini qaytaradi. Backend shu IDni
+strukturali request log spaniga qo'shadi; client xato xabarini log bilan aniq
+bog'lay oladi.
+
 Asosiy UX error kodlari: `admin_required`, `group_only`, `reply_required`,
 `target_is_admin`, `target_is_bot`, `invalid_duration`, `invalid_limit`,
 `not_found`. API-only kodlar: `init_data_required`, `invalid_init_data`,
@@ -68,7 +72,7 @@ GET    /api/chats/{chat_id}/blocklist?q=reklama&limit=100
 POST   /api/chats/{chat_id}/blocklist
 DELETE /api/chats/{chat_id}/blocklist/{term_id}
 
-GET    /api/chats/{chat_id}/audit?action=warn&source=admin&q=alisher&from=...&to=...&cursor=...
+GET    /api/chats/{chat_id}/audit?action=warn&source=admin&target_user_id=884201&q=alisher&from=...&to=...&cursor=...
 GET    /api/chats/{chat_id}/audit/stats
 GET    /api/chats/{chat_id}/audit/export?format=csv
 
@@ -115,6 +119,11 @@ incoming moderationda tekshiriladi. Hali implementatsiya qilinmagan `captcha`,
 Incident PATCH body: `{ "status": "acknowledged" }` yoki
 `{ "status": "resolved" }`. `average_response_seconds` faqat haqiqiy
 `acknowledged_at - detected_at` qiymatlarining o'rtachasidir.
+
+`target_user_id` audit filtri Mini Appdagi a'zo tarixini username taxminisiz,
+aniq Telegram ID orqali qaytaradi. Mute/ban/unmute/unban muvaffaqiyatli
+bajarilganda `chat_members.status` ham mos ravishda `restricted`, `kicked`,
+`member` yoki `left` holatiga sinxronlanadi.
 
 ## Protection score
 

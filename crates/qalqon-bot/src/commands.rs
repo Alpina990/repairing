@@ -299,6 +299,15 @@ pub async fn handle(
                 }
                 _ => unreachable!(),
             }
+            let member_status = match command {
+                Command::Ban => "kicked",
+                Command::Mute => "restricted",
+                Command::Unmute => "member",
+                _ => unreachable!(),
+            };
+            store
+                .update_member_status(chat_id.0, target.id.0, member_status)
+                .await?;
             audit_command(
                 &store,
                 &msg,
@@ -323,6 +332,7 @@ pub async fn handle(
             bot.unban_chat_member(chat_id, UserId(id))
                 .only_if_banned(true)
                 .await?;
+            store.update_member_status(chat_id.0, id, "left").await?;
             audit_command(&store, &msg, id, "unban", None, None).await;
             bot.send_message(chat_id, "Foydalanuvchi bandan chiqarildi.")
                 .await?;
@@ -358,6 +368,13 @@ pub async fn warn_user(
             settings.mute_duration_secs,
         )
         .await?;
+        if let (Some(status), Some((store, _))) =
+            (sanction_member_status(settings.warn_action), audit)
+        {
+            store
+                .update_member_status(msg.chat.id.0, target.id.0, status)
+                .await?;
+        }
         state
             .store
             .clear_warnings(msg.chat.id.0, target.id.0)
@@ -468,6 +485,14 @@ pub async fn execute_sanction(
         }
     }
     Ok(())
+}
+
+pub(crate) fn sanction_member_status(sanction: Sanction) -> Option<&'static str> {
+    match sanction {
+        Sanction::Mute => Some("restricted"),
+        Sanction::Ban => Some("kicked"),
+        Sanction::Delete | Sanction::Warn => None,
+    }
 }
 
 pub async fn audit_best_effort(
@@ -612,5 +637,13 @@ mod tests {
     fn parses_human_duration() {
         assert_eq!(parse_duration("30m").unwrap(), 1800);
         assert_eq!(parse_duration("2h").unwrap(), 7200);
+    }
+
+    #[test]
+    fn maps_sanctions_to_member_index_statuses() {
+        assert_eq!(sanction_member_status(Sanction::Mute), Some("restricted"));
+        assert_eq!(sanction_member_status(Sanction::Ban), Some("kicked"));
+        assert_eq!(sanction_member_status(Sanction::Warn), None);
+        assert_eq!(sanction_member_status(Sanction::Delete), None);
     }
 }

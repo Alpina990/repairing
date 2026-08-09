@@ -313,6 +313,11 @@ async fn punish(
                 settings.mute_duration_secs,
             )
             .await?;
+            if let Some(status) = commands::sanction_member_status(sanction) {
+                store
+                    .update_member_status(msg.chat.id.0, user.id.0, status)
+                    .await?;
+            }
             bot.send_message(
                 msg.chat.id,
                 format!("{}: {} ({reason}).", user.first_name, sanction.as_str()),

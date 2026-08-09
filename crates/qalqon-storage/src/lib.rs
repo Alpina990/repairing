@@ -475,6 +475,45 @@ mod tests {
                 .len(),
             1
         );
+        store
+            .update_member_status(chat_id, user_id, "restricted")
+            .await
+            .expect("update member status");
+        assert_eq!(
+            store
+                .member(chat_id, user_id)
+                .await
+                .expect("read member")
+                .expect("indexed member")
+                .status,
+            "restricted"
+        );
+        store
+            .upsert_member(&MemberUpsert {
+                chat_id,
+                chat_title: "Mini App Test",
+                chat_username: Some("mini_app_test"),
+                chat_type: "supergroup",
+                user_id,
+                username: Some("Alisher"),
+                first_name: "Alisher",
+                last_name: Some("Test"),
+                is_bot: false,
+                is_admin: None,
+                status: "member",
+            })
+            .await
+            .expect("refresh indexed member");
+        assert_eq!(
+            store
+                .member(chat_id, user_id)
+                .await
+                .expect("read refreshed member")
+                .expect("refreshed member")
+                .status,
+            "member",
+            "new activity is authoritative after a mute expires or a user rejoins"
+        );
 
         let entry = store
             .add_blocklist_entry(chat_id, "Reklama")
@@ -508,11 +547,28 @@ mod tests {
             })
             .await
             .expect("rich audit");
+        store
+            .rich_audit(&RichAuditEvent {
+                chat_id,
+                actor_id: Some(42),
+                target_id: user_id + 1,
+                action: "mute",
+                reason: Some("Other member"),
+                source: "admin",
+                status: "success",
+                duration_secs: Some(60),
+                telegram_message_id: None,
+                telegram_update_id: None,
+                metadata: json!({}),
+            })
+            .await
+            .expect("other member audit");
         let audits = store
             .audit_records(
                 chat_id,
                 &AuditFilter {
                     action: Some("mute".into()),
+                    target_user_id: Some(user_id),
                     ..Default::default()
                 },
             )

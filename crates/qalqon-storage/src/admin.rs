@@ -73,6 +73,7 @@ pub struct RichAuditEvent<'a> {
 pub struct AuditFilter {
     pub action: Option<String>,
     pub source: Option<String>,
+    pub target_user_id: Option<u64>,
     pub q: Option<String>,
     pub from: Option<DateTime<Utc>>,
     pub to: Option<DateTime<Utc>>,
@@ -217,6 +218,30 @@ impl PgModerationStore {
         .await
         .map_err(StoreError::new)?;
         Ok(())
+    }
+
+    pub async fn update_member_status(
+        &self,
+        chat_id: i64,
+        user_id: u64,
+        status: &str,
+    ) -> Result<bool, StoreError> {
+        if !matches!(
+            status,
+            "creator" | "administrator" | "member" | "restricted" | "left" | "kicked"
+        ) {
+            return Err(StoreError::new("invalid chat member status"));
+        }
+        let result = sqlx::query(
+            "UPDATE chat_members SET status=$3,updated_at=NOW() WHERE chat_id=$1 AND user_id=$2",
+        )
+        .bind(chat_id)
+        .bind(user_as_i64(user_id)?)
+        .bind(status)
+        .execute(&self.pool)
+        .await
+        .map_err(StoreError::new)?;
+        Ok(result.rows_affected() > 0)
     }
 
     pub async fn list_chats(&self) -> Result<Vec<ManagedChat>, StoreError> {
@@ -419,17 +444,20 @@ impl PgModerationStore {
               a.duration_secs,a.telegram_message_id,a.telegram_update_id,a.metadata,a.created_at
             FROM moderation_audit a WHERE a.chat_id=$1
               AND ($2::TEXT IS NULL OR a.action=$2) AND ($3::TEXT IS NULL OR a.source=$3)
-              AND ($4::TIMESTAMPTZ IS NULL OR a.created_at >= $4)
-              AND ($5::TIMESTAMPTZ IS NULL OR a.created_at <= $5)
-              AND ($6::BIGINT IS NULL OR a.id < $6)
-              AND ($7::TEXT IS NULL OR lower(COALESCE(a.reason,'')) LIKE $7
-                OR a.actor_id::TEXT LIKE $7 OR a.target_id::TEXT LIKE $7
+              AND ($4::BIGINT IS NULL OR a.target_id=$4)
+              AND ($5::TIMESTAMPTZ IS NULL OR a.created_at >= $5)
+              AND ($6::TIMESTAMPTZ IS NULL OR a.created_at <= $6)
+              AND ($7::BIGINT IS NULL OR a.id < $7)
+              AND ($8::TEXT IS NULL OR lower(COALESCE(a.reason,'')) LIKE $8
+                OR a.actor_id::TEXT LIKE $8 OR a.target_id::TEXT LIKE $8
                 OR EXISTS(SELECT 1 FROM chat_members m WHERE m.chat_id=a.chat_id
                   AND m.user_id IN (a.actor_id,a.target_id) AND
-                  (lower(COALESCE(m.username,'')) LIKE $7 OR lower(m.first_name) LIKE $7 OR lower(COALESCE(m.last_name,'')) LIKE $7)))
-            ORDER BY a.id DESC LIMIT $8"#,
-        ).bind(chat_id).bind(&filter.action).bind(&filter.source).bind(filter.from).bind(filter.to)
-          .bind(filter.cursor).bind(q).bind(filter.limit.unwrap_or(50).clamp(1,10_000))
+                  (lower(COALESCE(m.username,'')) LIKE $8 OR lower(m.first_name) LIKE $8 OR lower(COALESCE(m.last_name,'')) LIKE $8)))
+            ORDER BY a.id DESC LIMIT $9"#,
+        ).bind(chat_id).bind(&filter.action).bind(&filter.source)
+          .bind(filter.target_user_id.map(user_as_i64).transpose()?)
+          .bind(filter.from).bind(filter.to).bind(filter.cursor).bind(q)
+          .bind(filter.limit.unwrap_or(50).clamp(1,10_000))
           .fetch_all(&self.pool).await.map_err(StoreError::new)?;
         rows.into_iter().map(map_audit).collect()
     }

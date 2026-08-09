@@ -32,5 +32,26 @@ services:
       MINI_APP_AUTH_MAX_AGE_SECS: ${MINI_APP_AUTH_MAX_AGE_SECS:-3600}
       MINI_APP_ORIGIN: ${MINI_APP_ORIGIN:-}
 
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        VITE_API_BASE: /api
+        VITE_ALLOW_DEMO: ${VITE_ALLOW_DEMO:-false}
+    restart: unless-stopped
+    depends_on:
+      bot:
+        condition: service_started
+    ports:
+      - "${MINI_APP_BIND_HOST:-127.0.0.1}:${MINI_APP_PORT:-5173}:80"
+
+  tunnel:
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    depends_on:
+      frontend:
+        condition: service_healthy
+    command: tunnel --no-autoupdate --url http://frontend:80
+
 volumes:
   postgres_data:
