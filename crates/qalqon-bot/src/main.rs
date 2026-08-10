@@ -62,11 +62,13 @@ async fn main() -> Result<()> {
     bot.set_my_commands(commands::Command::bot_commands())
         .await
         .context("Telegram command menu ro'yxatdan o'tmadi")?;
-    if let Some(url) = config.mini_app_url.clone() {
+    let mini_app = config.mini_app_url.clone().map(|url| WebAppInfo { url });
+    if let Some(web_app) = mini_app.clone() {
+        let url = web_app.url.clone();
         bot.set_chat_menu_button()
             .menu_button(MenuButton::WebApp {
                 text: "Boshqaruv".into(),
-                web_app: WebAppInfo { url: url.clone() },
+                web_app,
             })
             .await
             .context("Telegram Mini App menu tugmasi ro'yxatdan o'tmadi")?;
@@ -94,7 +96,7 @@ async fn main() -> Result<()> {
             async move { api::serve(api_listener, api_state, api_origin.as_deref()).await },
         );
     Dispatcher::builder(bot, schema)
-        .dependencies(dptree::deps![state, me, pg_store.clone()])
+        .dependencies(dptree::deps![state, me, pg_store.clone(), mini_app])
         .enable_ctrlc_handler()
         .build()
         .dispatch()

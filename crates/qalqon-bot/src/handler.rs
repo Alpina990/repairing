@@ -10,7 +10,7 @@ use serde_json::json;
 use teloxide::{
     Bot,
     prelude::Requester,
-    types::{Me, Message, Update},
+    types::{Me, Message, Update, WebAppInfo},
     utils::command::BotCommands,
 };
 
@@ -26,6 +26,7 @@ pub async fn message(
     me: Me,
     state: AppState,
     store: PgModerationStore,
+    mini_app: Option<WebAppInfo>,
 ) -> Result<()> {
     index_message(&store, &msg).await?;
     if let Some(members) = msg.new_chat_members() {
@@ -44,6 +45,7 @@ pub async fn message(
                 command,
                 state.clone(),
                 store.clone(),
+                mini_app,
             )
             .await
             {

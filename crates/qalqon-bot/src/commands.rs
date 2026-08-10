@@ -7,9 +7,12 @@ use qalqon_storage::{PgModerationStore, RichAuditEvent};
 use serde_json::json;
 use teloxide::{
     Bot,
-    payloads::{RestrictChatMemberSetters, UnbanChatMemberSetters},
+    payloads::{RestrictChatMemberSetters, SendMessageSetters, UnbanChatMemberSetters},
     prelude::Requester,
-    types::{ChatId, ChatPermissions, Message, User, UserId},
+    types::{
+        ChatId, ChatPermissions, InlineKeyboardButton, InlineKeyboardMarkup, Message, User, UserId,
+        WebAppInfo,
+    },
     utils::command::BotCommands,
 };
 
@@ -64,11 +67,17 @@ pub async fn handle(
     command: Command,
     state: AppState,
     store: PgModerationStore,
+    mini_app: Option<WebAppInfo>,
 ) -> Result<()> {
     let chat_id = msg.chat.id;
     match command {
         Command::Start => {
-            bot.send_message(chat_id, "CheklaBot ishlayapti. Guruhga administrator qilib qo'shing va /help buyrug'ini yuboring.").await?;
+            let request = bot.send_message(chat_id, "CheklaBot ishlayapti. Guruhga administrator qilib qo'shing va /help buyrug'ini yuboring.");
+            let request = match start_reply_markup(msg.chat.is_private(), mini_app) {
+                Some(markup) => request.reply_markup(markup),
+                None => request,
+            };
+            request.await?;
         }
         Command::Help => {
             bot.send_message(chat_id, Command::descriptions().to_string())
@@ -339,6 +348,18 @@ pub async fn handle(
         }
     }
     Ok(())
+}
+
+fn start_reply_markup(
+    is_private_chat: bool,
+    mini_app: Option<WebAppInfo>,
+) -> Option<InlineKeyboardMarkup> {
+    if !is_private_chat {
+        return None;
+    }
+    mini_app.map(|web_app| {
+        InlineKeyboardMarkup::new([[InlineKeyboardButton::web_app("Mini Appni ochish", web_app)]])
+    })
 }
 
 pub async fn warn_user(
@@ -623,6 +644,32 @@ fn format_settings(value: &ChatSettings) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use teloxide::types::{InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo};
+    use url::Url;
+
+    #[test]
+    fn start_reply_markup_exposes_mini_app_in_private_chat() {
+        let web_app = WebAppInfo {
+            url: Url::parse("https://mini.example.com").unwrap(),
+        };
+
+        assert_eq!(
+            start_reply_markup(true, Some(web_app.clone())),
+            Some(InlineKeyboardMarkup::new([[
+                InlineKeyboardButton::web_app("Mini Appni ochish", web_app)
+            ]]))
+        );
+    }
+
+    #[test]
+    fn start_reply_markup_is_not_added_to_groups_or_without_url() {
+        let web_app = WebAppInfo {
+            url: Url::parse("https://mini.example.com").unwrap(),
+        };
+
+        assert_eq!(start_reply_markup(false, Some(web_app)), None);
+        assert_eq!(start_reply_markup(true, None), None);
+    }
 
     #[test]
     fn parses_flood_defaults() {
