@@ -220,7 +220,6 @@ fn validate_init_data(
     let hash = values
         .remove("hash")
         .ok_or_else(|| ApiError::unauthorized("invalid_init_data", "initData hash yo'q"))?;
-    values.remove("signature");
     let provided = hex::decode(hash)
         .map_err(|_| ApiError::unauthorized("invalid_init_data", "initData hash noto'g'ri"))?;
     let check_string = values
@@ -1560,5 +1559,40 @@ mod tests {
                 .code,
             "invalid_init_data"
         );
+    }
+
+    #[test]
+    fn validates_init_data_with_telegram_signature_field() {
+        let token = "123456789:test-token";
+        let auth_date = Utc::now().timestamp();
+        let mut values = BTreeMap::from([
+            ("auth_date".to_owned(), auth_date.to_string()),
+            ("query_id".to_owned(), "query-2".to_owned()),
+            (
+                "signature".to_owned(),
+                "telegram-third-party-signature".to_owned(),
+            ),
+            (
+                "user".to_owned(),
+                r#"{"id":43,"first_name":"Admin"}"#.to_owned(),
+            ),
+        ]);
+        let check_string = values
+            .iter()
+            .map(|(key, value)| format!("{key}={value}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let mut secret_mac = HmacSha256::new_from_slice(b"WebAppData").unwrap();
+        secret_mac.update(token.as_bytes());
+        let secret = secret_mac.finalize().into_bytes();
+        let mut data_mac = HmacSha256::new_from_slice(&secret).unwrap();
+        data_mac.update(check_string.as_bytes());
+        values.insert("hash".into(), hex::encode(data_mac.finalize().into_bytes()));
+        let signed = url::form_urlencoded::Serializer::new(String::new())
+            .extend_pairs(values.iter())
+            .finish();
+
+        let auth = validate_init_data(&signed, token, Duration::from_secs(60)).unwrap();
+        assert_eq!(auth.user.id, 43);
     }
 }
