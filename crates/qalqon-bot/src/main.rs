@@ -16,8 +16,9 @@ use teloxide::{
     Bot,
     dispatching::UpdateFilterExt,
     dptree,
+    payloads::SetChatMenuButtonSetters,
     prelude::{Dispatcher, Requester},
-    types::Update,
+    types::{MenuButton, Update, WebAppInfo},
     utils::command::BotCommands,
 };
 use tracing_subscriber::EnvFilter;
@@ -61,6 +62,16 @@ async fn main() -> Result<()> {
     bot.set_my_commands(commands::Command::bot_commands())
         .await
         .context("Telegram command menu ro'yxatdan o'tmadi")?;
+    if let Some(url) = config.mini_app_url.clone() {
+        bot.set_chat_menu_button()
+            .menu_button(MenuButton::WebApp {
+                text: "Boshqaruv".into(),
+                web_app: WebAppInfo { url: url.clone() },
+            })
+            .await
+            .context("Telegram Mini App menu tugmasi ro'yxatdan o'tmadi")?;
+        tracing::info!(%url, "Telegram Mini App menu tugmasi sozlandi");
+    }
     tracing::info!(username = me.username(), "CheklaBot ishga tushdi");
 
     let schema = dptree::entry()

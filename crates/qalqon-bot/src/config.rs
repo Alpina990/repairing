@@ -18,6 +18,7 @@ pub struct Config {
     pub api_addr: SocketAddr,
     pub mini_app_auth_max_age_secs: u64,
     pub mini_app_origin: Option<String>,
+    pub mini_app_url: Option<Url>,
 }
 
 impl Config {
@@ -40,6 +41,17 @@ impl Config {
                     .with_context(|| format!("OWNER_IDS ichida xato ID: {value}"))
             })
             .collect::<Result<HashSet<_>>>()?;
+        let mini_app_url = env::var("MINI_APP_URL")
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+            .map(|value| Url::parse(&value).context("MINI_APP_URL noto'g'ri"))
+            .transpose()?;
+        if mini_app_url
+            .as_ref()
+            .is_some_and(|url| url.scheme() != "https")
+        {
+            bail!("MINI_APP_URL HTTPS bo'lishi kerak");
+        }
 
         Ok(Self {
             token,
@@ -60,6 +72,7 @@ impl Config {
             mini_app_origin: env::var("MINI_APP_ORIGIN")
                 .ok()
                 .filter(|value| !value.trim().is_empty()),
+            mini_app_url,
         })
     }
 

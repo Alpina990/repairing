@@ -32,6 +32,11 @@ Docker frontend Nginx orqali `/api`ni bot containerining `8081` portiga proxy
 qiladi. Faqat lokal mock tekshiruvi uchun `.env`da `VITE_ALLOW_DEMO=true`
 berish mumkin. Productionda bu qiymat `false` bo‘lib qolishi shart.
 
+Coolify'da frontend va bot alohida app bo'lsa, bot app shared networkda
+`chekla-bot-api` aliasiga ega bo'lishi kerak. Frontend Nginx `/api` requestlarini
+shu aliasga yuboradi. Botdagi `MINI_APP_URL` frontendning HTTPS manziliga
+o'rnatilganda Telegram private chat menyusida `Boshqaruv` tugmasi yaratiladi.
+
 ## Tekshiruvlar
 
 ```powershell
