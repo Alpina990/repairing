@@ -173,7 +173,7 @@ impl PgModerationStore {
               ('blocklist','Blocklist',TRUE,FALSE),('welcome','Welcome',TRUE,TRUE),
               ('rules','Guruh qoidalari',TRUE,TRUE),('audit','Audit log',TRUE,TRUE),
               ('member_index','Aʼzolar indeksi',TRUE,FALSE),('captcha','CAPTCHA',FALSE,FALSE),
-              ('anti_raid','Anti-raid',FALSE,FALSE),('link_filter','Link filtri',FALSE,FALSE),
+              ('anti_raid','Anti-raid',FALSE,FALSE),('link_filter','Link filtri',FALSE,TRUE),
               ('reports','Shikoyatlar',FALSE,FALSE),('incident_response','Incident response',TRUE,TRUE)
             ) AS v(module_key,title,enabled,configured) ON CONFLICT DO NOTHING"#,
         )
@@ -670,6 +670,19 @@ impl PgModerationStore {
         .await
         .map_err(StoreError::new)
         .map(|value| value.unwrap_or(false))
+    }
+
+    pub async fn mark_module_triggered(&self, chat_id: i64, key: &str) -> Result<(), StoreError> {
+        self.ensure_admin_rows(chat_id).await?;
+        sqlx::query(
+            "UPDATE protection_modules SET last_triggered_at=NOW(),healthy=TRUE,updated_at=NOW() WHERE chat_id=$1 AND module_key=$2",
+        )
+        .bind(chat_id)
+        .bind(key)
+        .execute(&self.pool)
+        .await
+        .map_err(StoreError::new)?;
+        Ok(())
     }
 
     pub async fn update_runtime(

@@ -128,7 +128,11 @@ Settings PATCH body may contain any subset of:
 Module PATCH body: `{ "enabled": true, "config": {} }`. `anti_flood` va
 `welcome` toggle'lari real `ChatSettings`ga bog'langan; `blocklist` toggle'i
 incoming moderationda tekshiriladi. Hali implementatsiya qilinmagan `captcha`,
-`anti_raid`, `link_filter`, `reports` yoqilsa `module_unavailable` qaytadi.
+`anti_raid` yoki `reports` yoqilsa `module_unavailable` qaytadi. `link_filter`
+to'liq ishlaydi: oddiy URL, Telegram `url`/`text_link` entitylari, `t.me`
+havolalari va `@mention`larni admin bo'lmagan yuboruvchilardan avtomatik
+o'chiradi. Xuddi shu holat Telegramdagi `/links on|off|status` buyrug'i bilan
+boshqariladi.
 
 Incident PATCH body: `{ "status": "acknowledged" }` yoki
 `{ "status": "resolved" }`. `average_response_seconds` faqat haqiqiy

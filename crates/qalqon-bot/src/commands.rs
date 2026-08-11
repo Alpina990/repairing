@@ -59,6 +59,8 @@ pub enum Command {
     Rmblock,
     #[command(description = "taqiqlangan iboralar ro'yxati")]
     Blocklist,
+    #[command(description = "link va @mention filtri: /links on|off|status")]
+    Links,
 }
 
 pub async fn handle(
@@ -103,6 +105,65 @@ pub async fn handle(
                 format!("Blocklist:\n• {}", terms.join("\n• "))
             };
             bot.send_message(chat_id, text).await?;
+        }
+        Command::Links => {
+            ensure_group(&msg)?;
+            let mode = args(&msg).unwrap_or("status").trim().to_ascii_lowercase();
+            match mode.as_str() {
+                "status" => {
+                    let enabled = store.module_enabled(chat_id.0, "link_filter").await?;
+                    bot.send_message(
+                        chat_id,
+                        if enabled {
+                            "Link filtri yoqilgan. Adminlardan tashqari yuborilgan link va @mentionlar o'chiriladi."
+                        } else {
+                            "Link filtri o'chirilgan. Yoqish: /links on"
+                        },
+                    )
+                    .await?;
+                }
+                "on" | "off" => {
+                    require_admin(&bot, &msg, &state).await?;
+                    let enabled = mode == "on";
+                    store
+                        .update_module(
+                            chat_id.0,
+                            "link_filter",
+                            Some(enabled),
+                            Some(json!({
+                                "action": "delete",
+                                "admin_exempt": true,
+                                "links": true,
+                                "mentions": true
+                            })),
+                        )
+                        .await?
+                        .context("link_filter moduli topilmadi")?;
+                    audit_command(
+                        &store,
+                        &msg,
+                        actor_id(&msg),
+                        "module_update",
+                        Some(if enabled {
+                            "link_filter:on"
+                        } else {
+                            "link_filter:off"
+                        }),
+                        None,
+                    )
+                    .await;
+                    bot.send_message(
+                        chat_id,
+                        if enabled {
+                            "Link filtri yoqildi. Endi adminlardan tashqari yuborilgan link va @mentionlar o'chiriladi."
+                        } else {
+                            "Link filtri o'chirildi."
+                        },
+                    )
+                    .await?;
+                }
+                _ => bail!("foydalanish: /links on|off|status"),
+            }
         }
         Command::Setrules => {
             require_admin(&bot, &msg, &state).await?;
@@ -692,5 +753,13 @@ mod tests {
         assert_eq!(sanction_member_status(Sanction::Ban), Some("kicked"));
         assert_eq!(sanction_member_status(Sanction::Warn), None);
         assert_eq!(sanction_member_status(Sanction::Delete), None);
+    }
+
+    #[test]
+    fn parses_links_command_with_mode_argument() {
+        assert!(matches!(
+            Command::parse("/links on", "CheklaBot").unwrap(),
+            Command::Links
+        ));
     }
 }

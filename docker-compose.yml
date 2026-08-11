@@ -17,6 +17,10 @@ services:
   bot:
     build: .
     restart: unless-stopped
+    networks:
+      default:
+        aliases:
+          - chekla-bot-api
     depends_on:
       postgres:
         condition: service_healthy

@@ -551,7 +551,7 @@ async fn moderation_warn(
     Json(request): Json<ModerationRequest>,
 ) -> ApiResult<impl IntoResponse> {
     let actor = require_admin(&state, &headers, chat_id).await?;
-    ensure_target(&state, chat_id, request.target_user_id).await?;
+    let target = ensure_target(&state, chat_id, request.target_user_id).await?;
     let reason = request
         .reason
         .as_deref()
@@ -600,7 +600,21 @@ async fn moderation_warn(
             .map_err(ApiError::store)?;
         automatic_sanction = Some(settings.warn_action.as_str().to_owned());
     }
-    write_api_audit(&state, chat_id, actor.user.id, request.target_user_id, "warn", Some(reason), "success", None, json!({"warning_count":warning.count,"warning_limit":warning.limit,"automatic_sanction":automatic_sanction})).await;
+    let notice = warning_notice(
+        &target.user.first_name,
+        warning.count,
+        warning.limit,
+        reason,
+        automatic_sanction.as_deref(),
+    );
+    let notice_message = match state.bot.send_message(ChatId(chat_id), notice).await {
+        Ok(message) => message,
+        Err(error) => {
+            write_api_audit(&state, chat_id, actor.user.id, request.target_user_id, "warn", Some(reason), "failed", None, json!({"warning_persisted":true,"warning_count":warning.count,"warning_limit":warning.limit,"automatic_sanction":automatic_sanction,"notification_error":error.to_string()})).await;
+            return Err(ApiError::telegram(error));
+        }
+    };
+    write_api_audit(&state, chat_id, actor.user.id, request.target_user_id, "warn", Some(reason), "success", None, json!({"warning_count":warning.count,"warning_limit":warning.limit,"automatic_sanction":automatic_sanction,"notification_message_id":notice_message.id.0})).await;
     Ok(ok(json!(ModerationResponse {
         target_user_id: request.target_user_id,
         action: "warn".into(),
@@ -790,7 +804,7 @@ async fn moderation_unban(
     ))
 }
 
-async fn ensure_target(state: &ApiState, chat_id: i64, target_id: u64) -> ApiResult<()> {
+async fn ensure_target(state: &ApiState, chat_id: i64, target_id: u64) -> ApiResult<ChatMember> {
     let member = state
         .bot
         .get_chat_member(ChatId(chat_id), UserId(target_id))
@@ -808,7 +822,22 @@ async fn ensure_target(state: &ApiState, chat_id: i64, target_id: u64) -> ApiRes
             "Administratorga bu amalni bajarib bo'lmaydi",
         ));
     }
-    Ok(())
+    Ok(member)
+}
+
+fn warning_notice(
+    first_name: &str,
+    count: u16,
+    limit: u16,
+    reason: &str,
+    automatic_sanction: Option<&str>,
+) -> String {
+    match automatic_sanction {
+        Some(sanction) => format!(
+            "⚠️ {first_name} warning limitiga yetdi ({count}/{limit}). Avtomatik jazo: {sanction}.\nSabab: {reason}"
+        ),
+        None => format!("⚠️ {first_name} ogohlantirildi ({count}/{limit}).\nSabab: {reason}"),
+    }
 }
 
 async fn get_settings(
@@ -1158,10 +1187,7 @@ async fn patch_module(
 ) -> ApiResult<impl IntoResponse> {
     let actor = require_admin(&state, &headers, chat_id).await?;
     if request.enabled == Some(true)
-        && matches!(
-            module_key.as_str(),
-            "captcha" | "anti_raid" | "link_filter" | "reports"
-        )
+        && matches!(module_key.as_str(), "captcha" | "anti_raid" | "reports")
     {
         return Err(ApiError::conflict(
             "module_unavailable",
@@ -1211,13 +1237,23 @@ async fn patch_module(
             state.app.invalidate_policy(chat_id);
         }
     }
+    let effective_config = if module_key == "link_filter" && request.config.is_none() {
+        Some(json!({
+            "action": "delete",
+            "admin_exempt": true,
+            "links": true,
+            "mentions": true
+        }))
+    } else {
+        request.config.clone()
+    };
     let module = state
         .store
         .update_module(
             chat_id,
             &module_key,
             request.enabled,
-            request.config.clone(),
+            effective_config.clone(),
         )
         .await
         .map_err(ApiError::store)?
@@ -1231,7 +1267,7 @@ async fn patch_module(
         Some(&module_key),
         "success",
         None,
-        json!({"enabled":request.enabled,"config":request.config}),
+        json!({"enabled":request.enabled,"config":effective_config}),
     )
     .await;
     Ok(ok(json!(module)))
@@ -1645,6 +1681,18 @@ impl IntoResponse for ApiError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn warning_notice_is_visible_and_describes_the_result() {
+        assert_eq!(
+            warning_notice("Ali", 1, 3, "Takroriy reklama", None),
+            "⚠️ Ali ogohlantirildi (1/3).\nSabab: Takroriy reklama"
+        );
+        assert_eq!(
+            warning_notice("Ali", 3, 3, "Takroriy reklama", Some("mute")),
+            "⚠️ Ali warning limitiga yetdi (3/3). Avtomatik jazo: mute.\nSabab: Takroriy reklama"
+        );
+    }
 
     #[test]
     fn score_weights_sum_to_one_hundred() {

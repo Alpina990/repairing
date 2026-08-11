@@ -8,6 +8,7 @@ Bu loyiha eski Rose/Saitama/Marie oilasidagi botlarning foydali moderation tajri
 
 - sliding-window anti-flood va `delete | warn | mute | ban` jazosi;
 - Unicode-aware blocklist, avtomatik xabar o‘chirish va warning;
+- adminlardan tashqari URL, yashirin link, `t.me` va `@mention`larni o‘chiruvchi link filtri;
 - warning limitiga yetganda avtomatik mute yoki ban;
 - admin buyruqlari: warn, ban, unban, mute, unmute;
 - guruh qoidalari va sozlanadigan welcome template;
@@ -81,6 +82,8 @@ Admin buyruqlarida userga tegishli xabarga reply qilish talab qilinadi.
 /settings
 /setflood 8 10 mute
 /setwarnlimit 3
+/links on
+/links status
 /warn sabab
 /mute 2h
 /ban

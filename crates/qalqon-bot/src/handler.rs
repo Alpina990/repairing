@@ -10,7 +10,10 @@ use serde_json::json;
 use teloxide::{
     Bot,
     prelude::Requester,
-    types::{ChatMemberKind, ChatMemberUpdated, Me, Message, Update, WebAppInfo},
+    types::{
+        ChatMemberKind, ChatMemberUpdated, Me, Message, MessageEntity, MessageEntityKind, Update,
+        WebAppInfo,
+    },
     utils::command::BotCommands,
 };
 
@@ -266,6 +269,43 @@ async fn moderate(
     let Some(text) = msg.text().or_else(|| msg.caption()) else {
         return Ok(());
     };
+    let entities = if msg.text().is_some() {
+        msg.entities().unwrap_or_default()
+    } else {
+        msg.caption_entities().unwrap_or_default()
+    };
+    let link_filter_enabled = store.module_enabled(msg.chat.id.0, "link_filter").await?;
+    if link_filter_enabled && let Some(reason) = forbidden_link_reason(text, entities) {
+        bot.delete_message(msg.chat.id, msg.id).await?;
+        audit_delete(&store, &msg, user.id.0, update_id, "link_filter").await;
+        store
+            .rich_audit(&RichAuditEvent {
+                chat_id: msg.chat.id.0,
+                actor_id: None,
+                target_id: user.id.0,
+                action: "link_filter",
+                reason: Some(reason),
+                source: "auto",
+                status: "success",
+                duration_secs: None,
+                telegram_message_id: Some(i64::from(msg.id.0)),
+                telegram_update_id: Some(update_id),
+                metadata: json!({"matched_kind":reason}),
+            })
+            .await?;
+        store
+            .create_incident(
+                msg.chat.id.0,
+                "link_filter",
+                "low",
+                json!({"user_id":user.id.0,"message_id":msg.id.0,"matched_kind":reason}),
+            )
+            .await?;
+        store
+            .mark_module_triggered(msg.chat.id.0, "link_filter")
+            .await?;
+        return Ok(());
+    }
     let blocklist_enabled = store.module_enabled(msg.chat.id.0, "blocklist").await?;
     if blocklist_enabled
         && let ContentDecision::Block { matched_term } =
@@ -311,6 +351,32 @@ async fn moderate(
             .await?;
     }
     Ok(())
+}
+
+fn forbidden_link_reason(text: &str, entities: &[MessageEntity]) -> Option<&'static str> {
+    for entity in entities {
+        match entity.kind {
+            MessageEntityKind::Url | MessageEntityKind::TextLink { .. } => return Some("link"),
+            MessageEntityKind::Mention | MessageEntityKind::TextMention { .. } => {
+                return Some("mention");
+            }
+            _ => {}
+        }
+    }
+
+    let lowercase = text.to_ascii_lowercase();
+    [
+        "https://",
+        "http://",
+        "www.",
+        "t.me/",
+        "telegram.me/",
+        "telegram.dog/",
+        "tg://",
+    ]
+    .iter()
+    .any(|marker| lowercase.contains(marker))
+    .then_some("link")
 }
 
 async fn audit_delete(
@@ -414,7 +480,7 @@ async fn punish(
 mod member_index_tests {
     use super::*;
     use serde_json::json;
-    use teloxide::types::ChatMember;
+    use teloxide::types::{ChatMember, MessageEntity};
 
     fn member(status: &str) -> ChatMember {
         serde_json::from_value(json!({
@@ -457,5 +523,48 @@ mod member_index_tests {
             chat_migration(&new_message),
             Some((-4812396585, -1004487463600, false))
         );
+    }
+
+    #[test]
+    fn detects_telegram_link_and_mention_entities() {
+        let url: MessageEntity = serde_json::from_value(json!({
+            "type": "url", "offset": 0, "length": 19
+        }))
+        .expect("valid URL entity");
+        let hidden_link: MessageEntity = serde_json::from_value(json!({
+            "type": "text_link", "offset": 0, "length": 5,
+            "url": "https://example.com"
+        }))
+        .expect("valid text-link entity");
+        let mention: MessageEntity = serde_json::from_value(json!({
+            "type": "mention", "offset": 0, "length": 8
+        }))
+        .expect("valid mention entity");
+
+        assert_eq!(
+            forbidden_link_reason("https://example.com", &[url]),
+            Some("link")
+        );
+        assert_eq!(
+            forbidden_link_reason("saytga", &[hidden_link]),
+            Some("link")
+        );
+        assert_eq!(
+            forbidden_link_reason("@kanalim", &[mention]),
+            Some("mention")
+        );
+    }
+
+    #[test]
+    fn detects_unparsed_telegram_links_without_false_positive_for_plain_text() {
+        assert_eq!(
+            forbidden_link_reason("Kanal: t.me/chekla", &[]),
+            Some("link")
+        );
+        assert_eq!(
+            forbidden_link_reason("www.example.com ni ko'ring", &[]),
+            Some("link")
+        );
+        assert_eq!(forbidden_link_reason("Oddiy xabar @ belgisisiz", &[]), None);
     }
 }

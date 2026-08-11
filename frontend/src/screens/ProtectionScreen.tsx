@@ -9,7 +9,7 @@ import type { BlockedTerm, ChatSettings, ProtectionModule } from "../types";
 
 type ProtectionTab = "policy" | "content" | "modules";
 const requiredModules = new Set(["telegram_permissions", "database", "admin_auth", "audit", "member_index", "incident_response"]);
-const unavailableModules = new Set(["captcha", "anti_raid", "link_filter", "reports"]);
+const unavailableModules = new Set(["captcha", "anti_raid", "reports"]);
 
 export function ProtectionScreen() {
   const [tab, setTab] = useState<ProtectionTab>("policy");
