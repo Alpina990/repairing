@@ -220,6 +220,153 @@ impl PgModerationStore {
         Ok(())
     }
 
+    pub async fn migrate_chat(
+        &self,
+        old_chat_id: i64,
+        new_chat_id: i64,
+    ) -> Result<bool, StoreError> {
+        if old_chat_id == new_chat_id {
+            return Ok(false);
+        }
+        let mut tx = self.pool.begin().await.map_err(StoreError::new)?;
+        let old_exists: bool =
+            sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM chat_settings WHERE chat_id=$1)")
+                .bind(old_chat_id)
+                .fetch_one(&mut *tx)
+                .await
+                .map_err(StoreError::new)?;
+        if !old_exists {
+            tx.rollback().await.map_err(StoreError::new)?;
+            return Ok(false);
+        }
+
+        sqlx::query(
+            r#"INSERT INTO chat_settings(
+                chat_id,flood_limit,flood_window_secs,flood_action,warn_limit,warn_action,
+                mute_duration_secs,welcome_enabled,welcome_template,rules,updated_at)
+              SELECT $2,flood_limit,flood_window_secs,flood_action,warn_limit,warn_action,
+                mute_duration_secs,welcome_enabled,welcome_template,rules,updated_at
+              FROM chat_settings WHERE chat_id=$1 ON CONFLICT(chat_id) DO NOTHING"#,
+        )
+        .bind(old_chat_id)
+        .bind(new_chat_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(StoreError::new)?;
+        sqlx::query(
+            r#"UPDATE chat_settings AS target SET
+                flood_limit=source.flood_limit,flood_window_secs=source.flood_window_secs,
+                flood_action=source.flood_action,warn_limit=source.warn_limit,
+                warn_action=source.warn_action,mute_duration_secs=source.mute_duration_secs,
+                welcome_enabled=source.welcome_enabled,welcome_template=source.welcome_template,
+                rules=source.rules,updated_at=GREATEST(target.updated_at,source.updated_at)
+              FROM chat_settings AS source
+              WHERE target.chat_id=$2 AND source.chat_id=$1"#,
+        )
+        .bind(old_chat_id)
+        .bind(new_chat_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(StoreError::new)?;
+        sqlx::query(
+            r#"INSERT INTO managed_chats(chat_id,title,username,chat_type,last_seen_at,updated_at)
+              SELECT $2,title,username,'supergroup',last_seen_at,updated_at
+              FROM managed_chats WHERE chat_id=$1
+              ON CONFLICT(chat_id) DO UPDATE SET
+                title=CASE WHEN managed_chats.title='Telegram guruhi' THEN EXCLUDED.title ELSE managed_chats.title END,
+                username=COALESCE(managed_chats.username,EXCLUDED.username),chat_type='supergroup',
+                last_seen_at=GREATEST(managed_chats.last_seen_at,EXCLUDED.last_seen_at),
+                updated_at=GREATEST(managed_chats.updated_at,EXCLUDED.updated_at)"#,
+        )
+        .bind(old_chat_id)
+        .bind(new_chat_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(StoreError::new)?;
+        sqlx::query(
+            r#"INSERT INTO chat_members(
+                chat_id,user_id,username,first_name,last_name,is_bot,is_admin,status,last_seen_at,updated_at)
+              SELECT $2,user_id,username,first_name,last_name,is_bot,is_admin,status,last_seen_at,updated_at
+              FROM chat_members WHERE chat_id=$1
+              ON CONFLICT(chat_id,user_id) DO UPDATE SET
+                username=COALESCE(chat_members.username,EXCLUDED.username),
+                first_name=chat_members.first_name,last_name=COALESCE(chat_members.last_name,EXCLUDED.last_name),
+                is_bot=chat_members.is_bot OR EXCLUDED.is_bot,
+                is_admin=chat_members.is_admin OR EXCLUDED.is_admin,
+                last_seen_at=GREATEST(chat_members.last_seen_at,EXCLUDED.last_seen_at),
+                updated_at=GREATEST(chat_members.updated_at,EXCLUDED.updated_at)"#,
+        )
+        .bind(old_chat_id)
+        .bind(new_chat_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(StoreError::new)?;
+        sqlx::query(
+            r#"INSERT INTO blocked_terms(chat_id,term,created_at,match_count,last_matched_at,updated_at)
+              SELECT $2,term,created_at,match_count,last_matched_at,updated_at
+              FROM blocked_terms WHERE chat_id=$1 ON CONFLICT DO NOTHING"#,
+        )
+        .bind(old_chat_id)
+        .bind(new_chat_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(StoreError::new)?;
+        sqlx::query(
+            r#"INSERT INTO chat_runtime(
+                chat_id,bot_present,bot_admin,can_delete_messages,can_restrict_members,
+                can_ban_members,last_update_at,last_permission_check_at,updated_at)
+              SELECT $2,bot_present,bot_admin,can_delete_messages,can_restrict_members,
+                can_ban_members,last_update_at,last_permission_check_at,updated_at
+              FROM chat_runtime WHERE chat_id=$1
+              ON CONFLICT(chat_id) DO UPDATE SET
+                bot_present=chat_runtime.bot_present OR EXCLUDED.bot_present,
+                bot_admin=chat_runtime.bot_admin OR EXCLUDED.bot_admin,
+                can_delete_messages=chat_runtime.can_delete_messages OR EXCLUDED.can_delete_messages,
+                can_restrict_members=chat_runtime.can_restrict_members OR EXCLUDED.can_restrict_members,
+                can_ban_members=chat_runtime.can_ban_members OR EXCLUDED.can_ban_members,
+                last_update_at=GREATEST(chat_runtime.last_update_at,EXCLUDED.last_update_at),
+                last_permission_check_at=GREATEST(chat_runtime.last_permission_check_at,EXCLUDED.last_permission_check_at),
+                updated_at=GREATEST(chat_runtime.updated_at,EXCLUDED.updated_at)"#,
+        )
+        .bind(old_chat_id)
+        .bind(new_chat_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(StoreError::new)?;
+        sqlx::query(
+            r#"INSERT INTO protection_modules(
+                chat_id,module_key,title,enabled,healthy,configured,last_triggered_at,config,updated_at)
+              SELECT $2,module_key,title,enabled,healthy,configured,last_triggered_at,config,updated_at
+              FROM protection_modules WHERE chat_id=$1
+              ON CONFLICT(chat_id,module_key) DO UPDATE SET
+                title=EXCLUDED.title,enabled=EXCLUDED.enabled,healthy=EXCLUDED.healthy,
+                configured=EXCLUDED.configured,last_triggered_at=GREATEST(
+                  protection_modules.last_triggered_at,EXCLUDED.last_triggered_at),
+                config=EXCLUDED.config,updated_at=GREATEST(protection_modules.updated_at,EXCLUDED.updated_at)"#,
+        )
+        .bind(old_chat_id)
+        .bind(new_chat_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(StoreError::new)?;
+        for table in ["warnings", "moderation_incidents", "moderation_audit"] {
+            let query = format!("UPDATE {table} SET chat_id=$2 WHERE chat_id=$1");
+            sqlx::query(&query)
+                .bind(old_chat_id)
+                .bind(new_chat_id)
+                .execute(&mut *tx)
+                .await
+                .map_err(StoreError::new)?;
+        }
+        sqlx::query("DELETE FROM chat_settings WHERE chat_id=$1")
+            .bind(old_chat_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(StoreError::new)?;
+        tx.commit().await.map_err(StoreError::new)?;
+        Ok(true)
+    }
+
     pub async fn update_member_status(
         &self,
         chat_id: i64,
@@ -251,7 +398,6 @@ impl PgModerationStore {
     }
 
     pub async fn managed_chat(&self, chat_id: i64) -> Result<Option<ManagedChat>, StoreError> {
-        self.ensure_admin_rows(chat_id).await?;
         let row = sqlx::query("SELECT chat_id,title,username,chat_type,last_seen_at FROM managed_chats WHERE chat_id=$1")
             .bind(chat_id).fetch_optional(&self.pool).await.map_err(StoreError::new)?;
         Ok(row.map(map_chat))

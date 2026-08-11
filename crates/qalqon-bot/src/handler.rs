@@ -28,6 +28,18 @@ pub async fn message(
     store: PgModerationStore,
     mini_app: Option<WebAppInfo>,
 ) -> Result<()> {
+    if let Some((old_chat_id, new_chat_id, terminal)) = chat_migration(&msg) {
+        let migrated = store.migrate_chat(old_chat_id, new_chat_id).await?;
+        tracing::info!(
+            old_chat_id,
+            new_chat_id,
+            migrated,
+            "Telegram group supergroupga migratsiya qilindi"
+        );
+        if terminal {
+            return Ok(());
+        }
+    }
     index_message(&store, &msg).await?;
     if let Some(members) = msg.new_chat_members() {
         for member in members {
@@ -69,6 +81,14 @@ pub async fn edited_message(
 ) -> Result<()> {
     index_message(&store, &msg).await?;
     moderate(bot, msg, state, store, i64::from(update.id.0), false).await
+}
+
+fn chat_migration(msg: &Message) -> Option<(i64, i64, bool)> {
+    if let Some(new_chat_id) = msg.migrate_to_chat_id() {
+        return Some((msg.chat.id.0, new_chat_id.0, true));
+    }
+    msg.migrate_from_chat_id()
+        .map(|old_chat_id| (old_chat_id.0, msg.chat.id.0, false))
 }
 
 async fn index_message(store: &PgModerationStore, msg: &Message) -> Result<()> {
@@ -410,5 +430,32 @@ mod member_index_tests {
         assert_eq!(indexed_member_status(&member("member").kind), "member");
         assert_eq!(indexed_member_status(&member("left").kind), "left");
         assert_eq!(indexed_member_status(&member("kicked").kind), "kicked");
+    }
+
+    #[test]
+    fn detects_group_to_supergroup_service_messages() {
+        let old_message: Message = serde_json::from_value(json!({
+            "message_id": 1,
+            "date": 1_700_000_000,
+            "chat": { "id": -4812396585_i64, "type": "group", "title": "Old group" },
+            "migrate_to_chat_id": -1004487463600_i64
+        }))
+        .expect("valid old group migration message");
+        assert_eq!(
+            chat_migration(&old_message),
+            Some((-4812396585, -1004487463600, true))
+        );
+
+        let new_message: Message = serde_json::from_value(json!({
+            "message_id": 2,
+            "date": 1_700_000_001,
+            "chat": { "id": -1004487463600_i64, "type": "supergroup", "title": "New group" },
+            "migrate_from_chat_id": -4812396585_i64
+        }))
+        .expect("valid new supergroup migration message");
+        assert_eq!(
+            chat_migration(&new_message),
+            Some((-4812396585, -1004487463600, false))
+        );
     }
 }

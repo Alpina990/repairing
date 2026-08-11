@@ -58,7 +58,10 @@ Mini App a’zolar qidiruvini incoming message, `new_chat_members` va
 `chat_member` hodisalaridan tuzilgan lokal indeks orqali bajaradi. Bot
 qo‘shilishidan oldin hech qanday hodisasi ko‘rilmagan oddiy a’zo indeksga
 birinchi xabari yoki membership yangilanishidan keyin tushadi; aniq Telegram ID
-esa qidiruv vaqtida Telegram orqali tekshiriladi.
+esa qidiruv vaqtida Telegram orqali tekshiriladi. Telegram group supergroupga
+o‘tganda eski chat ID barcha sozlama va tarix bilan yangi IDga avtomatik
+ko‘chiriladi. Qidiruv lokal natija topmasa, guruh administratorlari Telegram’dan
+sinxronlanib ism va username bo‘yicha qayta qidiriladi.
 
 Ishga tushirishdan oldingi tezkor diagnostika:
 

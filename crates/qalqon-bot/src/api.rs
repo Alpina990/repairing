@@ -12,16 +12,16 @@ use chrono::Utc;
 use hmac::{Hmac, Mac};
 use qalqon_core::Sanction;
 use qalqon_storage::{
-    AuditFilter, MemberUpsert, PgModerationStore, ProtectionModule, RichAuditEvent,
+    AuditFilter, ManagedChat, MemberUpsert, PgModerationStore, ProtectionModule, RichAuditEvent,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::Sha256;
 use teloxide::{
-    Bot,
+    Bot, RequestError,
     payloads::UnbanChatMemberSetters,
     prelude::Requester,
-    types::{ChatId, ChatMemberKind, ChatPermissions, Me, UserId},
+    types::{ChatFullInfo, ChatId, ChatMember, ChatMemberKind, ChatPermissions, Me, UserId},
 };
 use tokio::net::TcpListener;
 use tower_http::{
@@ -287,16 +287,17 @@ async fn require_admin(
             "Guruh administratori bo'lish kerak",
         ));
     }
-    let status = match &member.kind {
-        ChatMemberKind::Owner(_) => "creator",
-        ChatMemberKind::Administrator(_) => "administrator",
-        ChatMemberKind::Member(_) => "member",
-        ChatMemberKind::Restricted(_) => "restricted",
-        ChatMemberKind::Left => "left",
-        ChatMemberKind::Banned(_) => "kicked",
-    };
-    state
-        .store
+    index_telegram_member(&state.store, chat_id, &chat, &member).await?;
+    Ok(auth)
+}
+
+async fn index_telegram_member(
+    store: &PgModerationStore,
+    chat_id: i64,
+    chat: &ChatFullInfo,
+    member: &ChatMember,
+) -> ApiResult<()> {
+    store
         .upsert_member(&MemberUpsert {
             chat_id,
             chat_title: chat.title().unwrap_or("Telegram guruhi"),
@@ -311,12 +312,28 @@ async fn require_admin(
             first_name: &member.user.first_name,
             last_name: member.user.last_name.as_deref(),
             is_bot: member.user.is_bot,
-            is_admin: Some(true),
-            status,
+            is_admin: Some(member.is_privileged()),
+            status: telegram_member_status(&member.kind),
         })
         .await
-        .map_err(ApiError::store)?;
-    Ok(auth)
+        .map_err(ApiError::store)
+}
+
+async fn sync_chat_administrators(state: &ApiState, chat_id: i64) -> ApiResult<()> {
+    let chat = state
+        .bot
+        .get_chat(ChatId(chat_id))
+        .await
+        .map_err(ApiError::telegram)?;
+    let administrators = state
+        .bot
+        .get_chat_administrators(ChatId(chat_id))
+        .await
+        .map_err(ApiError::telegram)?;
+    for member in administrators {
+        index_telegram_member(&state.store, chat_id, &chat, &member).await?;
+    }
+    Ok(())
 }
 
 async fn get_me(State(state): State<ApiState>, headers: HeaderMap) -> ApiResult<impl IntoResponse> {
@@ -331,15 +348,50 @@ async fn get_chats(
     headers: HeaderMap,
 ) -> ApiResult<impl IntoResponse> {
     let auth = authenticate(&state, &headers)?;
-    let mut allowed = Vec::new();
-    for chat in state.store.list_chats().await.map_err(ApiError::store)? {
-        match state
+    let mut allowed: Vec<ManagedChat> = Vec::new();
+    for listed_chat in state.store.list_chats().await.map_err(ApiError::store)? {
+        let (chat_id, member) = match state
             .bot
-            .get_chat_member(ChatId(chat.chat_id), UserId(auth.user.id))
+            .get_chat_member(ChatId(listed_chat.chat_id), UserId(auth.user.id))
             .await
         {
-            Ok(member) if member.is_privileged() => allowed.push(chat),
-            Ok(_) | Err(_) => {}
+            Ok(member) => (listed_chat.chat_id, member),
+            Err(error) => {
+                let Some(new_chat_id) = migrated_chat_id(&error) else {
+                    continue;
+                };
+                state
+                    .store
+                    .migrate_chat(listed_chat.chat_id, new_chat_id)
+                    .await
+                    .map_err(ApiError::store)?;
+                let Ok(member) = state
+                    .bot
+                    .get_chat_member(ChatId(new_chat_id), UserId(auth.user.id))
+                    .await
+                else {
+                    continue;
+                };
+                (new_chat_id, member)
+            }
+        };
+        if !member.is_privileged() {
+            continue;
+        }
+        let Ok(telegram_chat) = state.bot.get_chat(ChatId(chat_id)).await else {
+            continue;
+        };
+        index_telegram_member(&state.store, chat_id, &telegram_chat, &member).await?;
+        let Some(chat) = state
+            .store
+            .managed_chat(chat_id)
+            .await
+            .map_err(ApiError::store)?
+        else {
+            continue;
+        };
+        if !allowed.iter().any(|item| item.chat_id == chat_id) {
+            allowed.push(chat);
         }
     }
     Ok(ok(json!({ "items": allowed })))
@@ -416,11 +468,24 @@ async fn get_members(
             }
         }
     }
-    let members = state
+    let mut members = state
         .store
         .members(chat_id, query.q.as_deref(), query.limit.unwrap_or(50))
         .await
         .map_err(ApiError::store)?;
+    if members.is_empty() {
+        if sync_chat_administrators(&state, chat_id).await.is_err() {
+            tracing::warn!(
+                chat_id,
+                "Telegram administratorlarini a'zolar indeksiga sinxronlab bo'lmadi"
+            );
+        }
+        members = state
+            .store
+            .members(chat_id, query.q.as_deref(), query.limit.unwrap_or(50))
+            .await
+            .map_err(ApiError::store)?;
+    }
     Ok(ok(json!({ "items": members })))
 }
 
@@ -1409,6 +1474,13 @@ fn telegram_user_id_query(query: Option<&str>) -> Option<u64> {
         .flatten()
 }
 
+fn migrated_chat_id(error: &RequestError) -> Option<i64> {
+    match error {
+        RequestError::MigrateToChatId(chat_id) => Some(chat_id.0),
+        _ => None,
+    }
+}
+
 fn telegram_member_status(kind: &ChatMemberKind) -> &'static str {
     match kind {
         ChatMemberKind::Owner(_) => "creator",
@@ -1591,6 +1663,12 @@ mod tests {
         assert_eq!(telegram_user_id_query(Some(" 884201 ")), Some(884201));
         assert_eq!(telegram_user_id_query(Some("@alisher")), None);
         assert_eq!(telegram_user_id_query(Some("884201 ali")), None);
+    }
+
+    #[test]
+    fn detects_stale_group_id_from_telegram_error() {
+        let error = teloxide::RequestError::MigrateToChatId(ChatId(-1004487463600));
+        assert_eq!(migrated_chat_id(&error), Some(-1004487463600));
     }
 
     #[test]

@@ -92,6 +92,13 @@ familiya hamda Telegram ID indeksida qidiradi. Masalan, `@alisher`,
 lokal indeksda bo‘lmasa, backend `getChatMember` orqali tekshirib natijani
 indeksga qo‘shadi.
 
+`GET /api/chats` Telegram qaytargan `migrate_to_chat_id` parametrini taniydi va
+eski group IDdagi settings, member index, warning, blocklist, audit, runtime,
+module hamda incidentlarni yangi supergroup IDga atomik ko‘chiradi. Member
+qidiruvi lokal natija topmasa, `getChatAdministrators` orqali administratorlarni
+indekslab qidiruvni bir marta takrorlaydi. Bot API oddiy, hali hech qanday update
+bermagan jim a’zolarning to‘liq ro‘yxatini taqdim etmaydi.
+
 Moderation body:
 
 ```json

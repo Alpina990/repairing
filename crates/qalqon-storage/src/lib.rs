@@ -445,6 +445,93 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn migrated_group_keeps_settings_and_member_index() {
+        let Some(store) = test_store().await else {
+            return;
+        };
+        let old_chat_id = unique_chat_id();
+        let new_chat_id = old_chat_id - 1;
+        let user_id = 998_004_u64;
+
+        store
+            .set_warn_limit(old_chat_id, 7)
+            .await
+            .expect("configure old group");
+        store
+            .upsert_member(&MemberUpsert {
+                chat_id: old_chat_id,
+                chat_title: "Eski group",
+                chat_username: None,
+                chat_type: "group",
+                user_id,
+                username: Some("Akhmedov51"),
+                first_name: "Shohrux",
+                last_name: Some("Axmedov"),
+                is_bot: false,
+                is_admin: Some(true),
+                status: "creator",
+            })
+            .await
+            .expect("index old group member");
+        store
+            .add_blocked_term(old_chat_id, "reklama")
+            .await
+            .expect("add old group blocklist term");
+        store
+            .add_warning(old_chat_id, user_id, Some(42), "migration test")
+            .await
+            .expect("add old group warning");
+
+        store
+            .migrate_chat(old_chat_id, new_chat_id)
+            .await
+            .expect("migrate group to supergroup");
+
+        assert!(
+            store
+                .managed_chat(old_chat_id)
+                .await
+                .expect("read old chat")
+                .is_none(),
+            "stale group must not remain selectable"
+        );
+        assert_eq!(
+            store
+                .settings(new_chat_id)
+                .await
+                .expect("migrated settings")
+                .warn_limit,
+            7
+        );
+        let members = store
+            .members(new_chat_id, Some("Shohrux Axmedov"), 10)
+            .await
+            .expect("search migrated member");
+        assert_eq!(members.len(), 1);
+        assert_eq!(members[0].user_id, user_id);
+        assert_eq!(
+            store
+                .blocked_terms(new_chat_id)
+                .await
+                .expect("migrated blocklist"),
+            vec!["reklama"]
+        );
+        assert_eq!(
+            store
+                .warning_count(new_chat_id, user_id)
+                .await
+                .expect("migrated warning count"),
+            1
+        );
+
+        sqlx::query("DELETE FROM chat_settings WHERE chat_id = $1")
+            .bind(new_chat_id)
+            .execute(&store.pool)
+            .await
+            .expect("chat cleanup");
+    }
+
+    #[tokio::test]
     async fn mini_app_backend_roundtrip() {
         let Some(store) = test_store().await else {
             return;
