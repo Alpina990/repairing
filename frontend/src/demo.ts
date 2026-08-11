@@ -85,7 +85,15 @@ export function createDemoApi(): CheklaApi {
       last_check_at: new Date().toISOString(),
       recent_activity: audits,
     }),
-    getMembers: (_chatId, q = "") => wait({ items: members.filter((member) => `${member.first_name} ${member.last_name ?? ""} ${member.username ?? ""} ${member.user_id}`.toLowerCase().includes(q.toLowerCase())) }),
+    getMembers: (_chatId, q = "") => {
+      const terms = q.trim().toLowerCase().split(/\s+/).map((term) => term.replace(/^@/, "")).filter(Boolean);
+      return wait({ items: members.filter((member) => { const index = `${member.first_name} ${member.last_name ?? ""} ${member.username ?? ""} ${member.user_id}`.toLowerCase(); return terms.every((term) => index.includes(term)); }) });
+    },
+    getMember: async (_chatId, userId) => {
+      const member = members.find((item) => item.user_id === userId);
+      if (!member) throw new Error("A’zo topilmadi");
+      return wait(member);
+    },
     getWarnings: (_chatId, userId) => wait({ count: userId === 884201 ? 2 : 0, limit: settings.warn_limit }),
     moderate: async (_chatId, action, payload) => {
       await wait(null);

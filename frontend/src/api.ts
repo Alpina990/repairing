@@ -50,6 +50,7 @@ export interface CheklaApi {
   getChats(): Promise<{ items: ManagedChat[] }>;
   getOverview(chatId: number): Promise<Overview>;
   getMembers(chatId: number, q?: string): Promise<{ items: ChatMember[] }>;
+  getMember(chatId: number, userId: number): Promise<ChatMember>;
   getWarnings(chatId: number, userId: number): Promise<{ count: number; limit: number }>;
   moderate(chatId: number, action: string, payload: ModerationPayload): Promise<ModerationResult>;
   getSettings(chatId: number): Promise<ChatSettings>;
@@ -110,6 +111,7 @@ export function createHttpApi(base = import.meta.env.VITE_API_BASE || "/api"): C
     getChats: () => request("/chats"),
     getOverview: (chatId) => request(`/chats/${chatId}/overview`),
     getMembers: (chatId, q) => request(`/chats/${chatId}/members${queryString({ q, limit: 50 })}`),
+    getMember: (chatId, userId) => request(`/chats/${chatId}/members/${userId}`),
     getWarnings: (chatId, userId) => request(`/chats/${chatId}/members/${userId}/warnings`),
     moderate: (chatId, action, payload) => request(`/chats/${chatId}/moderation/${action}`, { method: "POST", body: JSON.stringify(payload) }),
     getSettings: (chatId) => request(`/chats/${chatId}/settings`),

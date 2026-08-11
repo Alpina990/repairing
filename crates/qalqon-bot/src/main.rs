@@ -78,7 +78,8 @@ async fn main() -> Result<()> {
 
     let schema = dptree::entry()
         .branch(Update::filter_message().endpoint(handler::message))
-        .branch(Update::filter_edited_message().endpoint(handler::edited_message));
+        .branch(Update::filter_edited_message().endpoint(handler::edited_message))
+        .branch(Update::filter_chat_member().endpoint(handler::chat_member));
     let health_listener = health::bind(config.health_addr).await?;
     let api_listener = api::bind(config.api_addr).await?;
     let health_task = tokio::spawn(health::serve(health_listener, store));

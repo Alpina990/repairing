@@ -263,14 +263,23 @@ impl PgModerationStore {
         q: Option<&str>,
         limit: i64,
     ) -> Result<Vec<ChatMemberRecord>, StoreError> {
-        let pattern = q.map(|value| format!("%{}%", value.trim().to_lowercase()));
+        let terms = q.and_then(|value| {
+            let terms = value
+                .split_whitespace()
+                .map(|term| term.trim_start_matches('@').to_lowercase())
+                .filter(|term| !term.is_empty())
+                .map(|term| format!("%{term}%"))
+                .collect::<Vec<_>>();
+            (!terms.is_empty()).then_some(terms)
+        });
         let rows = sqlx::query(
             r#"SELECT chat_id,user_id,username,first_name,last_name,is_bot,is_admin,status,last_seen_at,updated_at
-            FROM chat_members WHERE chat_id=$1 AND ($2::TEXT IS NULL OR
-              lower(COALESCE(username,'')) LIKE $2 OR lower(first_name) LIKE $2 OR
-              lower(COALESCE(last_name,'')) LIKE $2 OR user_id::TEXT LIKE $2)
+            FROM chat_members WHERE chat_id=$1 AND ($2::TEXT[] IS NULL OR NOT EXISTS (
+              SELECT 1 FROM unnest($2::TEXT[]) AS search_term(value)
+              WHERE lower(concat_ws(' ',first_name,last_name,username,user_id::TEXT)) NOT LIKE search_term.value
+            ))
             ORDER BY last_seen_at DESC LIMIT $3"#,
-        ).bind(chat_id).bind(pattern).bind(limit.clamp(1, 100))
+        ).bind(chat_id).bind(terms).bind(limit.clamp(1, 100))
           .fetch_all(&self.pool).await.map_err(StoreError::new)?;
         rows.into_iter().map(map_member).collect()
     }

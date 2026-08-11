@@ -1,5 +1,6 @@
-import { useEffect, useState } from "react";
+import { useDeferredValue, useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useSearchParams } from "react-router-dom";
 import { Ban, CheckCircle2, Clock3, RotateCcw, ShieldAlert, UserRound, Volume2, VolumeX } from "lucide-react";
 import { errorMessage } from "../api";
 import { useApp } from "../app-context";
@@ -14,18 +15,33 @@ type PendingAction = Action | "unwarn" | "unmute" | "unban";
 export function ModerationScreen() {
   const { api, chatId } = useApp();
   const queryClient = useQueryClient();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [search, setSearch] = useState("");
+  const deferredSearch = useDeferredValue(search.trim());
   const [selected, setSelected] = useState<ChatMember>();
   const [action, setAction] = useState<Action>("warn");
   const [reason, setReason] = useState("Takroriy reklama xabari");
   const [duration, setDuration] = useState(3600);
   const [pendingAction, setPendingAction] = useState<PendingAction>();
   const [toast, setToast] = useState<{ message: string; tone: "success" | "error" }>();
+  const previousChatId = useRef(chatId);
+  const requestedMemberValue = searchParams.get("member");
+  const requestedMemberId = requestedMemberValue && /^\d+$/.test(requestedMemberValue) ? Number(requestedMemberValue) : undefined;
 
-  const members = useQuery({ queryKey: ["members", chatId, search], queryFn: () => api.getMembers(chatId!, search), enabled: !!chatId });
+  const members = useQuery({ queryKey: ["members", chatId, deferredSearch], queryFn: () => api.getMembers(chatId!, deferredSearch), enabled: !!chatId });
+  const requestedMember = useQuery({ queryKey: ["member", chatId, requestedMemberId], queryFn: () => api.getMember(chatId!, requestedMemberId!), enabled: !!chatId && !!requestedMemberId });
   useEffect(() => {
-    if (!selected && members.data?.items[0]) setSelected(members.data.items[0]);
-  }, [members.data, selected]);
+    if (requestedMember.data) setSelected(requestedMember.data);
+  }, [requestedMember.data]);
+  useEffect(() => {
+    if (previousChatId.current !== chatId) {
+      setSelected(undefined);
+      setSearch("");
+      setPendingAction(undefined);
+      setSearchParams({}, { replace: true });
+    }
+    previousChatId.current = chatId;
+  }, [chatId, setSearchParams]);
   const warnings = useQuery({ queryKey: ["warnings", chatId, selected?.user_id], queryFn: () => api.getWarnings(chatId!, selected!.user_id), enabled: !!chatId && !!selected });
   const history = useQuery({ queryKey: ["member-audit", chatId, selected?.user_id], queryFn: () => api.getAudit(chatId!, { target_user_id: selected!.user_id, limit: 5 }), enabled: !!chatId && !!selected });
 
@@ -41,7 +57,7 @@ export function ModerationScreen() {
       setPendingAction(undefined);
       void queryClient.invalidateQueries({ queryKey: ["warnings", chatId, selected?.user_id] });
       void queryClient.invalidateQueries({ queryKey: ["overview", chatId] });
-      void queryClient.invalidateQueries({ queryKey: ["member-audit", chatId, selected?.username] });
+      void queryClient.invalidateQueries({ queryKey: ["member-audit", chatId, selected?.user_id] });
     },
     onError: (error) => {
       haptic("error");
@@ -55,17 +71,28 @@ export function ModerationScreen() {
     if (["ban", "unwarn", "unmute", "unban"].includes(nextAction)) setPendingAction(nextAction);
     else mutation.mutate(nextAction);
   };
+  const selectMember = (member: ChatMember) => {
+    setSelected(member);
+    setSearch("");
+    setSearchParams({ member: String(member.user_id) }, { replace: true });
+    haptic("success");
+  };
 
   return <div className="page-stack">
     <PageHeader title="Moderatsiya" subtitle="A’zolar indeksidan tanlang" />
     <div className="member-search-wrap">
-      <SearchField aria-label="Username yoki Telegram ID" placeholder="Username yoki Telegram ID" value={search} onChange={(event) => setSearch(event.target.value)} />
-      {search && members.data && <div className="search-results">{members.data.items.slice(0, 6).map((member) => <button type="button" key={member.user_id} onClick={() => { setSelected(member); setSearch(""); }}><Avatar member={member} /><span><strong>{displayName(member)}</strong><small>@{member.username ?? "username yo‘q"} · ID {member.user_id}</small></span><Badge>{member.status}</Badge></button>)}</div>}
+      <SearchField type="search" aria-label="A’zolarni qidirish" placeholder="Username, ism-familiya yoki Telegram ID" value={search} onChange={(event) => setSearch(event.target.value)} />
+      {search.trim() && <div className="search-results" role="listbox" aria-label="Qidiruv natijalari" aria-busy={members.isFetching}>
+        {members.isLoading || (members.isFetching && !members.data) ? <StateView kind="loading" message="A’zolar qidirilmoqda" />
+          : members.error ? <StateView kind="error" message={errorMessage(members.error)} />
+          : !members.data?.items.length ? <StateView kind="empty" message="Username, ism-familiya yoki ID bo‘yicha a’zo topilmadi" />
+          : members.data.items.slice(0, 20).map((member) => <button type="button" role="option" aria-selected={selected?.user_id === member.user_id} key={member.user_id} onClick={() => selectMember(member)}><Avatar member={member} /><span><strong>{displayName(member)}</strong><small>@{member.username ?? "username yo‘q"} · ID {member.user_id}</small></span><Badge>{member.status}</Badge></button>)}
+      </div>}
     </div>
 
-    {!selected && members.isLoading && <StateView kind="loading" message="A’zolar qidirilmoqda" />}
-    {!selected && !members.isLoading && <StateView kind="empty" message="Username yoki Telegram ID orqali foydalanuvchini toping" />}
-    {selected && <>
+    {!selected && !search.trim() && requestedMember.isLoading && <StateView kind="loading" message="A’zo yuklanmoqda" />}
+    {!selected && !search.trim() && !requestedMember.isLoading && <StateView kind="empty" message="Username, yozilgan ism yoki Telegram ID orqali foydalanuvchini toping" />}
+    {selected && !search.trim() && <>
       <Card className="member-card">
         <div className="member-identity"><Avatar member={selected} /><div><strong>{displayName(selected)}</strong><small>@{selected.username ?? "username yo‘q"} · ID {selected.user_id}</small></div><Badge tone={selected.status === "active" || selected.status === "member" ? "success" : "lime"}>{selected.status}</Badge></div>
         <div className="warning-progress"><div><span>Warning holati</span><strong>{warnings.data?.count ?? 0} / {warnings.data?.limit ?? "—"}</strong></div><progress max={warnings.data?.limit ?? 3} value={warnings.data?.count ?? 0} /></div>

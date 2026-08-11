@@ -373,6 +373,49 @@ async fn get_members(
     Query(query): Query<SearchQuery>,
 ) -> ApiResult<impl IntoResponse> {
     require_admin(&state, &headers, chat_id).await?;
+    if let Some(user_id) = telegram_user_id_query(query.q.as_deref())
+        && state
+            .store
+            .member(chat_id, user_id)
+            .await
+            .map_err(ApiError::store)?
+            .is_none()
+    {
+        match state
+            .bot
+            .get_chat_member(ChatId(chat_id), UserId(user_id))
+            .await
+        {
+            Ok(member) => {
+                let chat = state
+                    .store
+                    .managed_chat(chat_id)
+                    .await
+                    .map_err(ApiError::store)?
+                    .ok_or_else(|| ApiError::not_found("not_found", "Guruh topilmadi"))?;
+                state
+                    .store
+                    .upsert_member(&MemberUpsert {
+                        chat_id,
+                        chat_title: &chat.title,
+                        chat_username: chat.username.as_deref(),
+                        chat_type: &chat.chat_type,
+                        user_id: member.user.id.0,
+                        username: member.user.username.as_deref(),
+                        first_name: &member.user.first_name,
+                        last_name: member.user.last_name.as_deref(),
+                        is_bot: member.user.is_bot,
+                        is_admin: Some(member.is_privileged()),
+                        status: telegram_member_status(&member.kind),
+                    })
+                    .await
+                    .map_err(ApiError::store)?;
+            }
+            Err(error) => {
+                tracing::debug!(%error, chat_id, user_id, "Telegram ID bo'yicha a'zo topilmadi");
+            }
+        }
+    }
     let members = state
         .store
         .members(chat_id, query.q.as_deref(), query.limit.unwrap_or(50))
@@ -1358,6 +1401,24 @@ fn validate_duration(value: u64) -> ApiResult<()> {
         Ok(())
     }
 }
+
+fn telegram_user_id_query(query: Option<&str>) -> Option<u64> {
+    let value = query?.trim();
+    (!value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit()))
+        .then(|| value.parse().ok())
+        .flatten()
+}
+
+fn telegram_member_status(kind: &ChatMemberKind) -> &'static str {
+    match kind {
+        ChatMemberKind::Owner(_) => "creator",
+        ChatMemberKind::Administrator(_) => "administrator",
+        ChatMemberKind::Member(_) => "member",
+        ChatMemberKind::Restricted(_) => "restricted",
+        ChatMemberKind::Left => "left",
+        ChatMemberKind::Banned(_) => "kicked",
+    }
+}
 fn validate_audit_filter(filter: &AuditFilter) -> ApiResult<()> {
     if let Some(source) = filter.source.as_deref() {
         if !matches!(source, "auto" | "admin") {
@@ -1523,6 +1584,13 @@ mod tests {
     #[test]
     fn csv_escaping_is_safe() {
         assert_eq!(csv_cell("a,\"b\""), "\"a,\"\"b\"\"\"");
+    }
+
+    #[test]
+    fn detects_exact_telegram_id_queries() {
+        assert_eq!(telegram_user_id_query(Some(" 884201 ")), Some(884201));
+        assert_eq!(telegram_user_id_query(Some("@alisher")), None);
+        assert_eq!(telegram_user_id_query(Some("884201 ali")), None);
     }
 
     #[test]

@@ -44,7 +44,7 @@ qo‘llanmasi: [frontend/README.md](frontend/README.md).
 
 ## Ishga tushirish
 
-1. `@BotFather` orqali bot yarating. Guruh xabarlarini ko‘rishi uchun botni guruhga admin qiling; kamida `Delete messages` va `Ban users` huquqlarini bering.
+1. `@BotFather` orqali bot yarating. Guruh xabarlarini ko‘rishi va a’zolar indeksini yangilashi uchun botni guruhga admin qiling; kamida `Delete messages` va `Ban users` huquqlarini bering.
 2. `.env.example`dan `.env` yarating, kuchli `POSTGRES_PASSWORD` va `TELOXIDE_TOKEN` kiriting.
 3. Ishga tushiring:
 
@@ -54,6 +54,11 @@ docker compose logs -f bot
 ```
 
 Bot DB migratsiyasini start vaqtida o‘zi bajaradi. Tokenni repoga commit qilmang.
+Mini App a’zolar qidiruvini incoming message, `new_chat_members` va
+`chat_member` hodisalaridan tuzilgan lokal indeks orqali bajaradi. Bot
+qo‘shilishidan oldin hech qanday hodisasi ko‘rilmagan oddiy a’zo indeksga
+birinchi xabari yoki membership yangilanishidan keyin tushadi; aniq Telegram ID
+esa qidiruv vaqtida Telegram orqali tekshiriladi.
 
 Ishga tushirishdan oldingi tezkor diagnostika:
 

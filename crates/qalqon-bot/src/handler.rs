@@ -10,7 +10,7 @@ use serde_json::json;
 use teloxide::{
     Bot,
     prelude::Requester,
-    types::{Me, Message, Update, WebAppInfo},
+    types::{ChatMemberKind, ChatMemberUpdated, Me, Message, Update, WebAppInfo},
     utils::command::BotCommands,
 };
 
@@ -102,6 +102,47 @@ async fn index_user(
     };
     store.upsert_member(&value).await?;
     Ok(())
+}
+
+pub async fn chat_member(update: ChatMemberUpdated, store: PgModerationStore) -> Result<()> {
+    if !update.chat.is_group() && !update.chat.is_supergroup() {
+        return Ok(());
+    }
+    let member = &update.new_chat_member;
+    store
+        .upsert_member(&MemberUpsert {
+            chat_id: update.chat.id.0,
+            chat_title: update.chat.title().unwrap_or("Telegram guruhi"),
+            chat_username: update.chat.username(),
+            chat_type: if update.chat.is_supergroup() {
+                "supergroup"
+            } else {
+                "group"
+            },
+            user_id: member.user.id.0,
+            username: member.user.username.as_deref(),
+            first_name: &member.user.first_name,
+            last_name: member.user.last_name.as_deref(),
+            is_bot: member.user.is_bot,
+            is_admin: Some(matches!(
+                member.kind,
+                ChatMemberKind::Owner(_) | ChatMemberKind::Administrator(_)
+            )),
+            status: indexed_member_status(&member.kind),
+        })
+        .await?;
+    Ok(())
+}
+
+fn indexed_member_status(kind: &ChatMemberKind) -> &'static str {
+    match kind {
+        ChatMemberKind::Owner(_) => "creator",
+        ChatMemberKind::Administrator(_) => "administrator",
+        ChatMemberKind::Member(_) => "member",
+        ChatMemberKind::Restricted(_) => "restricted",
+        ChatMemberKind::Left => "left",
+        ChatMemberKind::Banned(_) => "kicked",
+    }
 }
 
 async fn welcome(
@@ -347,4 +388,27 @@ async fn punish(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod member_index_tests {
+    use super::*;
+    use serde_json::json;
+    use teloxide::types::ChatMember;
+
+    fn member(status: &str) -> ChatMember {
+        serde_json::from_value(json!({
+            "user": { "id": 42, "is_bot": false, "first_name": "Ali" },
+            "status": status,
+            "until_date": 0
+        }))
+        .expect("valid Telegram chat member fixture")
+    }
+
+    #[test]
+    fn maps_chat_member_updates_to_index_statuses() {
+        assert_eq!(indexed_member_status(&member("member").kind), "member");
+        assert_eq!(indexed_member_status(&member("left").kind), "left");
+        assert_eq!(indexed_member_status(&member("kicked").kind), "kicked");
+    }
 }

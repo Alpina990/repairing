@@ -2,8 +2,6 @@ import {
   Activity,
   AlertTriangle,
   Check,
-  ChevronDown,
-  CircleUserRound,
   Grid2X2,
   MoreHorizontal,
   Search,
@@ -14,31 +12,16 @@ import {
 import { useEffect, useRef, type ButtonHTMLAttributes, type ReactNode } from "react";
 import { NavLink } from "react-router-dom";
 import { useApp } from "./app-context";
+import { AppHeader } from "./AppHeader";
 import { haptic } from "./telegram";
 
 export function AppShell({ children }: { children: ReactNode }) {
-  const { chat, chats, chatId, setChatId, demo } = useApp();
+  const { demo } = useApp();
   return (
     <div className="viewport">
       <div className="phone-shell">
         {demo && <div className="demo-ribbon">LOCAL DEMO · Telegramga amal yuborilmaydi</div>}
-        <header className="app-header">
-          <div className="brand-lockup">
-            <span className="eyebrow">CHEKLABOT</span>
-            <label className="chat-picker">
-              <span className="sr-only">Boshqariladigan guruh</span>
-              <select value={chatId ?? ""} onChange={(event) => setChatId(Number(event.target.value))}>
-                {chats.map((item) => <option key={item.chat_id} value={item.chat_id}>{item.title}</option>)}
-              </select>
-              <ChevronDown size={16} aria-hidden="true" />
-            </label>
-            {!chat && <strong>Guruh tanlanmagan</strong>}
-          </div>
-          <div className="header-actions">
-            <button className="icon-button" type="button" aria-label="Qidirish"><Search size={19} /></button>
-            <NavLink className="icon-button" to="/more" aria-label="Admin profili"><CircleUserRound size={19} /></NavLink>
-          </div>
-        </header>
+        <AppHeader />
         <main className="app-main">{children}</main>
         <nav className="bottom-nav" aria-label="Asosiy navigatsiya">
           <NavItem to="/overview" icon={<Grid2X2 />} label="Asosiy" />

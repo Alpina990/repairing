@@ -40,9 +40,17 @@ time { color: var(--muted); font: 600 11px "Geist Mono", ui-monospace, monospace
 .app-header { position: sticky; top: 0; z-index: 20; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: calc(14px + env(safe-area-inset-top)) 16px 12px; background: #121315eb; backdrop-filter: blur(18px); }
 .brand-lockup { min-width: 0; display: grid; gap: 3px; }
 .eyebrow { color: var(--muted); font: 750 10px "Geist Mono", ui-monospace, monospace; letter-spacing: .12em; text-transform: uppercase; }
-.chat-picker { display: flex; align-items: center; gap: 2px; min-width: 0; }
-.chat-picker select { max-width: 250px; appearance: none; border: 0; padding: 0; background: transparent; color: var(--white); font-size: 18px; font-weight: 760; cursor: pointer; text-overflow: ellipsis; }
-.chat-picker option { color: #111; }
+.chat-picker-trigger { max-width: 270px; min-width: 0; display: flex; align-items: center; gap: 5px; padding: 0; border: 0; background: transparent; color: var(--white); font-size: 18px; font-weight: 760; text-align: left; cursor: pointer; }
+.chat-picker-trigger span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-picker-trigger svg { transition: transform .18s; }
+.header-menu-backdrop { position: fixed; z-index: 1; inset: 0; border: 0; background: #0007; cursor: default; }
+.header-group-menu { position: absolute; z-index: 2; top: calc(100% - 4px); left: 12px; right: 12px; display: grid; gap: 5px; padding: 10px; border: 1px solid #ffffff12; border-radius: 18px; background: #222329f7; box-shadow: var(--shadow); backdrop-filter: blur(18px); }
+.header-group-menu > strong { padding: 5px 8px 7px; font-size: 12px; }
+.header-group-menu button { width: 100%; min-height: 60px; display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 10px; padding: 8px; border: 0; border-radius: 12px; background: transparent; text-align: left; cursor: pointer; }
+.header-group-menu button:hover, .header-group-menu button[aria-selected="true"] { background: #ffffff0a; }
+.header-group-menu button > span:nth-child(2) { min-width: 0; display: grid; gap: 3px; }
+.header-group-menu button > span:nth-child(2) strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.header-group-menu button > svg { color: var(--lime); }
 .header-actions { display: flex; gap: 8px; }
 .icon-button { width: 44px; height: 44px; display: inline-grid; place-items: center; border: 0; border-radius: 50%; background: var(--panel); color: var(--white); text-decoration: none; cursor: pointer; }
 .app-main { flex: 1; padding: 8px 16px 28px; }
@@ -111,6 +119,17 @@ time { color: var(--muted); font: 600 11px "Geist Mono", ui-monospace, monospace
 .search-results button:hover, .group-list button:hover { background: #ffffff08; }
 .search-results button > span:nth-child(2), .group-list button > span:nth-child(2) { min-width: 0; display: grid; gap: 3px; }
 .search-results strong, .group-list strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.search-backdrop { place-items: start center; padding-top: calc(18px + env(safe-area-inset-top)); }
+.search-dialog { width: min(100%, 402px); max-height: calc(100dvh - 36px - env(safe-area-inset-top)); display: grid; gap: 14px; padding: 17px; overflow: hidden; border: 1px solid #ffffff12; border-radius: 22px; background: #1d1e22; box-shadow: var(--shadow); animation: dialog-in .2s ease-out; }
+.search-dialog-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.search-dialog-header > div { min-width: 0; display: grid; gap: 4px; }
+.search-dialog-header h2 { font-size: 22px; letter-spacing: -.03em; }
+.search-dialog-header button { width: 42px; height: 42px; display: grid; place-items: center; border: 0; border-radius: 50%; background: var(--panel); color: var(--muted); cursor: pointer; }
+.member-result-list { min-height: 120px; display: grid; align-content: start; gap: 4px; overflow-y: auto; }
+.member-result-list > button { width: 100%; min-height: 64px; display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 10px; padding: 8px; border: 0; border-radius: 13px; background: transparent; text-align: left; cursor: pointer; }
+.member-result-list > button:hover, .member-result-list > button:focus-visible { background: #ffffff08; }
+.member-result-list > button > span:nth-child(2) { min-width: 0; display: grid; gap: 3px; }
+.member-result-list > button strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .avatar { width: 42px; height: 42px; display: inline-grid; place-items: center; border-radius: 50%; background: var(--lime); color: var(--black); font-size: 13px; font-weight: 900; }
 .avatar-large { width: 54px; height: 54px; font-size: 16px; }
 .member-card { display: grid; gap: 16px; }
@@ -131,10 +150,11 @@ progress::-webkit-progress-value { border-radius: 9px; background: var(--lime); 
 .action-explainer p { color: var(--muted); font-size: 12px; }
 
 .field { display: grid; gap: 8px; margin-top: 12px; }
+.settings-grid > .field { min-width: 0; }
 .field:first-child { margin-top: 0; }
 .field > span { display: flex; justify-content: space-between; gap: 10px; color: var(--white); font-size: 13px; font-weight: 700; }
 .field > span small { font-weight: 500; }
-.field input, .field select, .field textarea, .inline-form input { width: 100%; min-height: 46px; border: 1px solid #ffffff0b; border-radius: 12px; background: var(--panel); color: var(--white); padding: 11px 12px; outline: none; resize: vertical; }
+.field input, .field select, .field textarea, .inline-form input { min-width: 0; width: 100%; min-height: 46px; border: 1px solid #ffffff0b; border-radius: 12px; background: var(--panel); color: var(--white); padding: 11px 12px; outline: none; resize: vertical; }
 .field textarea { line-height: 1.5; }
 .field input:focus, .field select:focus, .field textarea:focus, .inline-form input:focus { border-color: #e9ff3d70; }
 .chip-row { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 10px; }
@@ -146,6 +166,7 @@ progress::-webkit-progress-value { border-radius: 9px; background: var(--lime); 
 .toolbar { display: flex; gap: 8px; }
 .toolbar .button { padding-inline: 12px; }
 .filter-panel { padding-top: 5px; }
+.filter-panel .settings-grid .field:nth-child(n + 3) { grid-column: 1 / -1; }
 
 .compact-list, .timeline, .term-list, .module-list, .group-list, .incident-list, .setup-list { display: grid; gap: 4px; }
 .compact-row, .term-row, .module-row { min-height: 58px; display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 10px; padding: 7px 2px; border-bottom: 1px solid #ffffff08; }

@@ -23,7 +23,7 @@ export function MoreScreen() {
     <Card className="admin-card"><span className="avatar avatar-large">{initials(name)}</span><div><span className="eyebrow">GET /API/ME</span><strong>{name}</strong><small>@{me?.user.username ?? "username yo‘q"} · ID {me?.user.id}</small></div><Badge tone="success">{demo ? "DEMO" : "AUTH"}</Badge></Card>
     <Card>
       <SectionHeader title="Boshqariladigan guruhlar" meta={`${chats.length} guruh`} />
-      <div className="group-list">{chats.map((chat) => <button type="button" key={chat.chat_id} onClick={() => setChatId(chat.chat_id)}><span className="avatar">{initials(chat.title)}</span><span><strong>{chat.title}</strong><small>{chat.chat_type}{chat.username || chat.chat_username ? ` · @${chat.username ?? chat.chat_username}` : ""}</small></span><span><Badge tone={chat.chat_id === chatId ? "lime" : "neutral"}>{chat.chat_id === chatId ? "TANLANGAN" : "ADMIN"}</Badge><small>{relativeTime(chat.last_update_at)}</small></span></button>)}</div>
+      <div className="group-list">{chats.map((chat) => <button type="button" key={chat.chat_id} onClick={() => setChatId(chat.chat_id)}><span className="avatar">{initials(chat.title)}</span><span><strong>{chat.title}</strong><small>{chat.chat_type}{chat.username || chat.chat_username ? ` · @${chat.username ?? chat.chat_username}` : ""}</small></span><span><Badge tone={chat.chat_id === chatId ? "lime" : "neutral"}>{chat.chat_id === chatId ? "TANLANGAN" : "ADMIN"}</Badge><small>{relativeTime(chat.last_seen_at ?? chat.last_update_at)}</small></span></button>)}</div>
     </Card>
     <Card>
       <SectionHeader title="Botni sozlash" meta="3 asosiy qadam" />

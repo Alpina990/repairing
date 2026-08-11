@@ -475,6 +475,24 @@ mod tests {
                 .len(),
             1
         );
+        assert_eq!(
+            store
+                .members(chat_id, Some("@Alisher"), 10)
+                .await
+                .expect("search member by @username")
+                .len(),
+            1,
+            "Telegram uslubidagi @username qidiruvi ishlashi kerak"
+        );
+        assert_eq!(
+            store
+                .members(chat_id, Some("Alisher Test"), 10)
+                .await
+                .expect("search member by full name")
+                .len(),
+            1,
+            "ism va familiya birga yozilganda a'zo topilishi kerak"
+        );
         store
             .update_member_status(chat_id, user_id, "restricted")
             .await

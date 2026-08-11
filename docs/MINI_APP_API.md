@@ -85,6 +85,13 @@ GET    /api/chats/{chat_id}/incidents?status=detected&cursor=...
 PATCH  /api/chats/{chat_id}/incidents/{incident_id}
 ```
 
+`members?q=` qidiruvi katta-kichik harfni farqlamaydi, `@username` prefiksini
+qabul qiladi va bo‘shliq bilan ajratilgan barcha tokenlarni username, ism,
+familiya hamda Telegram ID indeksida qidiradi. Masalan, `@alisher`,
+`Alisher Karimov` va `884201` bir xil endpoint orqali ishlaydi. Aniq raqamli ID
+lokal indeksda bo‘lmasa, backend `getChatMember` orqali tekshirib natijani
+indeksga qo‘shadi.
+
 Moderation body:
 
 ```json

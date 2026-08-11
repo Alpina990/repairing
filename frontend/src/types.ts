@@ -19,6 +19,7 @@ export interface ManagedChat {
   username?: string | null;
   chat_username?: string | null;
   chat_type: "group" | "supergroup";
+  last_seen_at?: string | null;
   last_update_at?: string | null;
   updated_at?: string | null;
 }
