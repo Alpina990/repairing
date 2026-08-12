@@ -127,6 +127,7 @@ bo‘lmasa, bot konfiguratsiyadagi urinish/backoff chegarasigacha qayta ulanadi.
 - Bir instance uchun long polling yetarli. Horizontal scalingdan oldin webhook ingress, Redis rate-limit va distributed deduplication qo‘shiladi.
 - Telegram admin huquqlari commandda har safar fresh tekshiriladi; oddiy message moderation uchun 5 daqiqalik cache ishlatiladi.
 - `OWNER_IDS` emergency override hisoblanadi; imkon qadar bo‘sh qoldiring yoki juda cheklangan saqlang.
+- `EXPECTED_BOT_USERNAME=chekla_qalqon_bot` boshqa bot tokeni bilan tasodifiy ishga tushishni bloklaydi.
 - PostgreSQL backup va token rotation operator zimmasida.
 
 ## Litsenziya

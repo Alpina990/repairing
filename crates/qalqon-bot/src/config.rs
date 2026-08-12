@@ -6,6 +6,7 @@ use url::Url;
 #[derive(Debug, Clone)]
 pub struct Config {
     pub token: String,
+    pub expected_bot_username: String,
     pub telegram_api_url: Option<Url>,
     pub database_url: String,
     pub database_max_connections: u32,
@@ -24,6 +25,15 @@ pub struct Config {
 impl Config {
     pub fn from_env() -> Result<Self> {
         let token = env::var("TELOXIDE_TOKEN").context("TELOXIDE_TOKEN kiritilmagan")?;
+        let expected_bot_username =
+            env::var("EXPECTED_BOT_USERNAME").unwrap_or_else(|_| "chekla_qalqon_bot".to_owned());
+        if expected_bot_username
+            .trim()
+            .trim_start_matches('@')
+            .is_empty()
+        {
+            bail!("EXPECTED_BOT_USERNAME bo'sh bo'lmasligi kerak");
+        }
         let database_url = env::var("DATABASE_URL").context("DATABASE_URL kiritilmagan")?;
         let database_max_connections = parse_env("DATABASE_MAX_CONNECTIONS", 10)?;
         if database_max_connections == 0 {
@@ -55,6 +65,7 @@ impl Config {
 
         Ok(Self {
             token,
+            expected_bot_username,
             telegram_api_url: env::var("TELEGRAM_API_URL")
                 .ok()
                 .map(|value| Url::parse(&value).context("TELEGRAM_API_URL noto'g'ri"))

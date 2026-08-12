@@ -45,6 +45,7 @@ async fn main() -> Result<()> {
             .get_me()
             .await
             .context("Telegram token yoki tarmoq tekshiruvi o'tmadi")?;
+        validate_bot_identity(me.username(), &config.expected_bot_username)?;
         tracing::info!(
             username = me.username(),
             "doctor: database va Telegram tayyor"
@@ -59,6 +60,7 @@ async fn main() -> Result<()> {
         Duration::from_secs(config.policy_cache_ttl_secs),
     );
     let me = bot.get_me().await?;
+    validate_bot_identity(me.username(), &config.expected_bot_username)?;
     bot.set_my_commands(commands::Command::bot_commands())
         .await
         .context("Telegram command menu ro'yxatdan o'tmadi")?;
@@ -154,4 +156,27 @@ fn init_tracing() {
         .with_env_filter(filter)
         .json()
         .init();
+}
+
+fn validate_bot_identity(actual: &str, expected: &str) -> Result<()> {
+    let actual = actual.trim().trim_start_matches('@');
+    let expected = expected.trim().trim_start_matches('@');
+    if actual.eq_ignore_ascii_case(expected) {
+        return Ok(());
+    }
+    anyhow::bail!(
+        "Telegram token @{actual} botiga tegishli; bu loyiha uchun @{expected} tokeni kutilgan"
+    )
+}
+
+#[cfg(test)]
+mod identity_tests {
+    use super::*;
+
+    #[test]
+    fn accepts_only_the_configured_telegram_bot_username() {
+        assert!(validate_bot_identity("chekla_qalqon_bot", "chekla_qalqon_bot").is_ok());
+        assert!(validate_bot_identity("@Chekla_Qalqon_Bot", "chekla_qalqon_bot").is_ok());
+        assert!(validate_bot_identity("CheklaGuardbot", "chekla_qalqon_bot").is_err());
+    }
 }
